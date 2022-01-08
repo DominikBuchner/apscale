@@ -4,7 +4,7 @@ from pathlib import Path
 from joblib import Parallel, delayed
 
 ## quality filtering function to quality filter the specified file
-def quality_filtering(file, project = None, maxee = None, min_length = None, max_length = None):
+def quality_filtering(file, project = None, comp_lvl = None, maxee = None, min_length = None, max_length = None):
     """Function to apply quality filtering to a gzipped fastq file. Outputs a gzipped fasta file
     with quality filtered reads. Filtered reads will be discarded."""
 
@@ -23,7 +23,7 @@ def quality_filtering(file, project = None, maxee = None, min_length = None, max
                         '--fastq_qmax', str(64)], capture_output = True)
 
     ## write gzipped output so save space
-    with gzip.open(Path(project).joinpath('5_quality_filtering', 'data', sample_name_out), 'wb') as out:
+    with gzip.open(Path(project).joinpath('5_quality_filtering', 'data', sample_name_out), 'wb', comp_lvl) as out:
         out.write(f.stdout)
 
     ## collect processed and passed reads from the log file
@@ -51,8 +51,11 @@ def main(project = Path.cwd()):
     is the current working directory."""
 
     ## collect variables from the settings file
+    gen_settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '0_general_settings')
+    cores, comp_lvl = gen_settings['cores to use'].item(), gen_settings['compression level'].item()
+
     settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '5_quality_filtering')
-    cores, maxee, min_length, max_length = settings['cores to use'].item(), settings['maxEE'].item(), settings['min length'].item(), settings['max length'].item()
+    maxee, min_length, max_length = settings['maxEE'].item(), settings['min length'].item(), settings['max length'].item()
 
     ## collect the input files from primer trimming step
     input = glob.glob(str(Path(project).joinpath('4_primer_trimming', 'data', '*.fastq.gz')))
@@ -66,7 +69,7 @@ def main(project = Path.cwd()):
         pass
 
     ## parallelize the quality filtering
-    Parallel(n_jobs = cores)(delayed(quality_filtering)(file, project = project, maxee = maxee, min_length = min_length, max_length = max_length) for file in input)
+    Parallel(n_jobs = cores)(delayed(quality_filtering)(file, project = project, comp_lvl = comp_lvl, maxee = maxee, min_length = min_length, max_length = max_length) for file in input)
 
     ## write logfile from pkl log, remove single logs after
     summary_logs = glob.glob(str(Path(project).joinpath('5_quality_filtering', 'temp', '*.pkl')))
