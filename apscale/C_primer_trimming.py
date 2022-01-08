@@ -54,8 +54,11 @@ def main(project = Path.cwd()):
     is the current working directory."""
 
     ## collect variables from the Settings file
+    gen_settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '0_general_settings')
+    cores, comp_lvl = gen_settings['cores to use'].item(), gen_settings['compression level'].item()
+
     settings = settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '4_primer_trimming')
-    cores, p5_primer, p7_primer, anchoring = settings['cores to use'].item(), settings["P5 Primer (5' - 3')"].item(), settings["P7 Primer (5' - 3')"].item(), settings['anchoring'].item()
+    p5_primer, p7_primer, anchoring = settings["P5 Primer (5' - 3')"].item(), settings["P7 Primer (5' - 3')"].item(), settings['anchoring'].item()
 
     ## collect the input files from PE merging step
     input = glob.glob(str(Path(project).joinpath('3_PE_merging', 'data', '*.fastq.gz')))
