@@ -77,4 +77,4 @@ def create_project(project_name):
     wb.save(Path(project_name).joinpath('Settings.xlsx'))
     writer.close()
 
-create_project('C:/Users/dommi/Desktop/Development')
+create_project()
