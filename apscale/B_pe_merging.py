@@ -19,7 +19,8 @@ def pe_merge(file_pair, project = None, comp_lvl = None, maxdiffpct = None, maxd
                         '--fastqout', '-', '--quiet',
                         '--fastq_maxdiffpct', str(maxdiffpct),
                         '--fastq_maxdiffs', str(maxdiffs),
-                        '--fastq_minovlen', str(minovlen)], capture_output = True)
+                        '--fastq_minovlen', str(minovlen),
+                        '--fastq_allowmergestagger'], capture_output = True)
 
     ## write output to gzipped file, always same folder if run from the project
     with gzip.open(Path(project).joinpath('3_PE_merging', 'data', sample_name_out), 'wb', comp_lvl) as out:
