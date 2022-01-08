@@ -5,7 +5,7 @@ from demultiplexer import file_pairs
 from joblib import Parallel, delayed
 
 ## file pair: matching forward and reverse reads, project: folder to write to
-def pe_merge(file_pair, project = None, maxdiffpct = None, maxdiffs = None, minovlen = None):
+def pe_merge(file_pair, project = None, comp_lvl = None, maxdiffpct = None, maxdiffs = None, minovlen = None):
     """Function to merge to gzipped fastq.gz files via vsearch. Output will be
     a gzipped file containing the merged reads."""
 
@@ -22,7 +22,7 @@ def pe_merge(file_pair, project = None, maxdiffpct = None, maxdiffs = None, mino
                         '--fastq_minovlen', str(minovlen)], capture_output = True)
 
     ## write output to gzipped file, always same folder if run from the project
-    with gzip.open(Path(project).joinpath('3_PE_merging', 'data', sample_name_out), 'wb') as out:
+    with gzip.open(Path(project).joinpath('3_PE_merging', 'data', sample_name_out), 'wb', comp_lvl) as out:
         out.write(f.stdout)
 
     ## collect processed reads and merged reads from stderr, save finishing time and date
@@ -47,8 +47,11 @@ def main(project = Path.cwd()):
     is the current working directory."""
 
     ## collect variables from the settings file
+    gen_settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '0_general_settings')
+    cores, comp_lvl = gen_settings['cores to use'].item(), gen_settings['compression level'].item()
+
     settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '3_PE_merging')
-    cores, maxdiffpct, maxdiffs, minovlen = settings['cores to use'].item(), settings['maxdiffpct'].item(), settings['maxdiffs'].item(), settings['minovlen'].item()
+    maxdiffpct, maxdiffs, minovlen = settings['maxdiffpct'].item(), settings['maxdiffs'].item(), settings['minovlen'].item()
 
     ## collect all files to merge, find matching file pairs
     input = glob.glob(str(Path(project).joinpath('2_demultiplexing', 'data', '*.fastq.gz')))
@@ -65,7 +68,7 @@ def main(project = Path.cwd()):
         pass
 
     ## parallelize the PE merging, find out how many cores to use
-    Parallel(n_jobs = cores)(delayed(pe_merge)(pair, project = project, maxdiffpct = maxdiffpct, maxdiffs = maxdiffs, minovlen = minovlen) for pair in pairs)
+    Parallel(n_jobs = cores)(delayed(pe_merge)(pair, project = project, comp_lvl = comp_lvl, maxdiffpct = maxdiffpct, maxdiffs = maxdiffs, minovlen = minovlen) for pair in pairs)
 
     ## write the log file from pkl log, remove logs after
     summary_logs = glob.glob(str(Path(project).joinpath('3_PE_merging', 'temp', '*.pkl')))
