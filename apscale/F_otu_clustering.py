@@ -174,4 +174,5 @@ def main(project = Path.cwd()):
     ## remove temporary files
     shutil.rmtree(Path(project).joinpath('7_otu_clustering', 'temp'))
 
-main()
+if __name__ == "__main__":
+    main()

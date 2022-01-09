@@ -173,4 +173,5 @@ def main(project = Path.cwd()):
     ## remove temporary files
     shutil.rmtree(Path(project).joinpath('8_denoising', 'temp'))
 
-main()
+if __name__ == "__main__":
+    main()

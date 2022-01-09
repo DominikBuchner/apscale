@@ -90,4 +90,5 @@ def main(project = Path.cwd()):
     ## remove temporally saved logs from single files
     shutil.rmtree(Path(project).joinpath('3_PE_merging', 'temp'))
 
-main()
+if __name__ == "__main__":
+    main()

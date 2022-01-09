@@ -94,4 +94,5 @@ def main(project = Path.cwd()):
     ## remove temporary files
     shutil.rmtree(Path(project).joinpath('5_quality_filtering', 'temp'))
 
-main()
+if __name__ == "__main__":
+    main()
