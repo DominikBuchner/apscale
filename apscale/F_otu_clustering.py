@@ -70,7 +70,7 @@ def remapping(file, project = None, pct_id = None):
                         '--id', str(pct_id / 100),
                         '--output_no_hits',
                         '--maxhits', '1',
-                        '--otutabout', '-', '--quiet',
+                        '--otutabout', '-', '--quiet', '--threads', str(1),
                         '--log', Path(project).joinpath('7_otu_clustering', 'temp', '{}_mapping_log.txt'.format(sample_name_out))], capture_output = True)
 
     ## directly parse the output to a pandas dataframe

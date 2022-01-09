@@ -69,7 +69,7 @@ def remapping_esv(file, project = None):
                         '--db', Path(project).joinpath('8_denoising', '{}_ESVs.fasta'.format(Path(project).stem)),
                         '--output_no_hits',
                         '--maxhits', '1',
-                        '--otutabout', '-', '--quiet',
+                        '--otutabout', '-', '--quiet', '--threads', str(1),
                         '--log', Path(project).joinpath('8_denoising', 'temp', '{}_mapping_log.txt'.format(sample_name_out))], capture_output = True)
 
     ## directly parse the output to a pandas dataframe
