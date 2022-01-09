@@ -15,7 +15,7 @@ def dereplication(file, project = None, comp_lvl = None):
     ## use --log because for some reason no info is written to stderr with this command
     f = subprocess.run(['vsearch',
                         '--derep_fulllength', Path(file),
-                        '--output', '-', '--quiet',
+                        '--output', '-', '--quiet', '--fasta_width', str(0),
                         '--log', Path(project).joinpath('6_dereplication_pooling', 'temp', '{}.txt'.format(sample_name_out)),
                         '--sizeout'], capture_output = True)
 
@@ -56,7 +56,7 @@ def pooling(file_list, project = None, comp_lvl = None):
     ## run vsearch --derep_fulllength to dereplicate the file
     f = subprocess.run(['vsearch',
                         '--derep_fulllength', Path(project).joinpath('6_dereplication_pooling', 'data', 'pooling', 'pooled_sequences.fasta.gz'),
-                        '--output', '-', '--quiet',
+                        '--output', '-', '--quiet', '--fasta_width', str(0),
                         '--sizein', '--sizeout',
                         '--minuniquesize', str(2)], capture_output = True)
 
