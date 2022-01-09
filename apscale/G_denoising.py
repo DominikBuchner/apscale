@@ -7,7 +7,7 @@ from Bio.SeqIO.FastaIO import SimpleFastaParser
 from io import StringIO
 
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize
-def denoise(project = None, alpha = None, minsize = None):
+def denoise(project = None, comp_lvl = None, cores = None, alpha = None, minsize = None):
     """Function to apply denoisind to a given gzipped file. Outputs a fasta file with all
     centroid sequences."""
 
@@ -25,10 +25,11 @@ def denoise(project = None, alpha = None, minsize = None):
                         '--minsize', str(minsize),
                         '--sizein', '--sizeout',
                         '--centroids', '-', '--fasta_width', str(0), '--quiet',
-                        '--log', Path(project).joinpath('8_denoising', 'temp', 'denoising_log.txt')], capture_output = True)
+                        '--log', Path(project).joinpath('8_denoising', 'temp', 'denoising_log.txt'),
+                        '--threads', str(cores)], capture_output = True)
 
     # write gzipped output so save space
-    with gzip.open(Path(project).joinpath('8_denoising', 'data', sample_name_out_1), 'wb') as out:
+    with gzip.open(Path(project).joinpath('8_denoising', 'data', sample_name_out_1), 'wb', comp_lvl) as out:
         out.write(f.stdout)
 
     ## collect processed and passed reads from the log file
@@ -111,11 +112,14 @@ def main(project = Path.cwd()):
         pass
 
     ## collect variables from the settings file
+    gen_settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '0_general_settings')
+    cores, comp_lvl = gen_settings['cores to use'].item(), gen_settings['compression level'].item()
+
     settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '8_denoising')
-    cores, alpha, minsize = settings['cores to use'].item(), settings['alpha'].item(), settings['minsize'].item()
+    alpha, minsize = settings['alpha'].item(), settings['minsize'].item()
 
     ## denoise the dataset
-    denoise(project = project, alpha = alpha, minsize = minsize)
+    denoise(project = project, comp_lvl = comp_lvl, cores = cores, alpha = alpha, minsize = minsize)
 
     ## gather files for remapping of ESVs
     input = glob.glob(str(Path(project).joinpath('6_dereplication_pooling', 'data', 'dereplication', '*.fasta.gz')))
