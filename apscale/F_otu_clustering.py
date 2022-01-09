@@ -8,7 +8,7 @@ from Bio.SeqIO.FastaIO import SimpleFastaParser
 from io import StringIO
 
 ## clustering function to cluster all sequences in input fasta with given pct_id
-def otu_clustering(project = None, pct_id = None):
+def otu_clustering(project = None, comp_lvl = None, cores = None, pct_id = None):
     """Function to apply OTU clustering to a given gzipped file. Outputs a fasta file
     with all centroid sequences."""
 
@@ -25,10 +25,11 @@ def otu_clustering(project = None, pct_id = None):
                         '--id', str(pct_id / 100),
                         '--sizein', '--sizeout', '--relabel', 'OTU_',
                         '--centroids', '-', '--fasta_width', str(0), '--quiet',
-                        '--log', Path(project).joinpath('7_otu_clustering', 'temp', 'clustering_log.txt')], capture_output = True)
+                        '--log', Path(project).joinpath('7_otu_clustering', 'temp', 'clustering_log.txt'),
+                        '--threads', str(cores)], capture_output = True)
 
     # write gzipped output so save space
-    with gzip.open(Path(project).joinpath('7_otu_clustering', 'data', sample_name_out_1), 'wb') as out:
+    with gzip.open(Path(project).joinpath('7_otu_clustering', 'data', sample_name_out_1), 'wb', comp_lvl) as out:
         out.write(f.stdout)
 
     ## collect processed and passed reads from the log file
@@ -112,11 +113,14 @@ def main(project = Path.cwd()):
         pass
 
     ## collect variables from the settings file
+    gen_settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '0_general_settings')
+    cores, comp_lvl = gen_settings['cores to use'].item(), gen_settings['compression level'].item()
+
     settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '7_otu_clustering')
-    cores, pct_id = settings['cores to use'].item(), settings['pct id'].item()
+    pct_id = settings['pct id'].item()
 
     ## run OTU clustering function
-    otu_clustering(project = project, pct_id = pct_id)
+    otu_clustering(project = project, comp_lvl = comp_lvl, cores = cores, pct_id = pct_id)
 
     ## gather files for remapping of OTUS
     input = glob.glob(str(Path(project).joinpath('6_dereplication_pooling', 'data', 'dereplication', '*.fasta.gz')))
