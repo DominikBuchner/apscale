@@ -2,10 +2,9 @@ import subprocess, gzip, datetime, glob, os, pickle, openpyxl, shutil
 import pandas as pd
 from pathlib import Path
 from joblib import Parallel, delayed
-from Bio.SeqIO.FastaIO import SimpleFastaParser
 
 ## dereplication function to dereplicate a gzipped fasta file
-def dereplication(file, project = None):
+def dereplication(file, project = None, comp_lvl = None):
     """Function to dereplicate a gzipped fasta file. Abundance annotations will be
     written to the output fasta."""
 
@@ -21,7 +20,7 @@ def dereplication(file, project = None):
                         '--sizeout'], capture_output = True)
 
     ## write gzipped output so save space
-    with gzip.open(Path(project).joinpath('6_dereplication_pooling', 'data', 'dereplication', sample_name_out), 'wb') as out:
+    with gzip.open(Path(project).joinpath('6_dereplication_pooling', 'data', 'dereplication', sample_name_out), 'wb', comp_lvl) as out:
         out.write(f.stdout)
 
     ## collect processed and passed reads from the log file
@@ -39,19 +38,16 @@ def dereplication(file, project = None):
         pickle.dump([sample_name_out, finished, version, seqs, unique_seqs], log)
 
 ## function to pool the dereplicated reads, pooled reads are dereplicated again
-def pooling(file_list, project = None):
+def pooling(file_list, project = None, comp_lvl = None):
     """Function to pool the dereplicated reads, needs a path to dereplicated reads folder
     and a project to work in. Both are passed by the main function."""
 
-    ## generate a generator to do line by line operations for each input file
-    files = [SimpleFastaParser(gzip.open(file, 'rt')) for file in file_list]
-
     ## write the output file
-    with gzip.open(Path(project).joinpath('6_dereplication_pooling', 'data', 'pooling', 'pooled_sequences.fasta.gz'), 'wt') as out:
-        number_of_files = len(files)
-        for i in range(len(files)):
-            for (header, seq) in files[i]:
-                out.write('>{}\n{}\n'.format(header, seq))
+    with gzip.open(Path(project).joinpath('6_dereplication_pooling', 'data', 'pooling', 'pooled_sequences.fasta.gz'), 'wt', comp_lvl) as pool:
+        number_of_files = len(file_list)
+        for i in range(len(file_list)):
+            with gzip.open(file_list[i], 'rt') as to_pool:
+                shutil.copyfileobj(to_pool, pool)
             print('{}: Added {} of {} files to the pooled sequences.'.format(datetime.datetime.now().strftime("%H:%M:%S"), i + 1, number_of_files))
 
     ## dereplicate the pool with minuniquesize = 2
@@ -65,7 +61,7 @@ def pooling(file_list, project = None):
                         '--minuniquesize', str(2)], capture_output = True)
 
     ## write gzipped output so save space
-    with gzip.open(Path(project).joinpath('6_dereplication_pooling', 'data', 'pooling', 'pooled_sequences_dereplicated.fasta.gz'), 'wb') as out:
+    with gzip.open(Path(project).joinpath('6_dereplication_pooling', 'data', 'pooling', 'pooled_sequences_dereplicated.fasta.gz'), 'wb', comp_lvl) as out:
         out.write(f.stdout)
 
 ## main function to call the script
@@ -75,8 +71,8 @@ def main(project = Path.cwd()):
     the merged file again. Project defaults so current working directory."""
 
     ## collect variables from the settings file
-    settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '6_dereplication_pooling')
-    cores = settings['cores to use'].item()
+    gen_settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '0_general_settings')
+    cores, comp_lvl = gen_settings['cores to use'].item(), gen_settings['compression level'].item()
 
     ## collect input files from quality filtering step
     input = glob.glob(str(Path(project).joinpath('5_quality_filtering', 'data', '*.fasta.gz')))
@@ -90,7 +86,7 @@ def main(project = Path.cwd()):
         pass
 
     ## parallelize the dereplication
-    Parallel(n_jobs = cores)(delayed(dereplication)(file, project = project) for file in input)
+    Parallel(n_jobs = cores)(delayed(dereplication)(file, project = project, comp_lvl = comp_lvl) for file in input)
 
     ## write log for the dereplication from pkl logs
     summary_logs = glob.glob(str(Path(project).joinpath('6_dereplication_pooling', 'temp', '*.pkl')))
@@ -114,7 +110,7 @@ def main(project = Path.cwd()):
 
     ## pool the dereplicated files
     files = glob.glob(str(Path(project).joinpath('6_dereplication_pooling' ,'data', 'dereplication', '*.fasta.gz')))
-    pooling(files, project = project)
+    pooling(files, project = project, comp_lvl = comp_lvl)
 
     ## remove temporary files
     shutil.rmtree(Path(project).joinpath('6_dereplication_pooling', 'temp'))
