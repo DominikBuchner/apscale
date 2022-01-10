@@ -28,7 +28,13 @@ def pe_merge(file_pair, project = None, comp_lvl = None, maxdiffpct = None, maxd
         out.write(f.stdout)
 
     ## collect processed reads and merged reads from stderr, save finishing time and date
-    reads, merged = int(f.stderr.decode('ascii', errors = 'ignore').split('\r\n')[0][:10])), int(f.stderr.decode('ascii', errors = 'ignore').split('\r\n')[1][:10]))
+    with open(Path(project).joinpath('3_PE_merging', 'temp', '{}_log.txt'.format(sample_name_out)), 'wb') as out:
+        out.write(f.stderr)
+
+    with open(Path(project).joinpath('3_PE_merging', 'temp', '{}_log.txt'.format(sample_name_out)), 'rt') as log_file:
+        content = log_file.read()
+        reads, merged = int(content.split('\n')[0][:10]), int(content.split('\n')[1][:10])
+
     finished = '{}'.format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
     ## Give user output, if 0 reads are the output handle Zero division exception
