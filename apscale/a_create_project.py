@@ -1,4 +1,4 @@
-import sys, os, shutil, openpyxl, psutil
+import sys, os, shutil, openpyxl, psutil, datetime
 import pandas as pd
 from pathlib import Path
 
@@ -76,3 +76,6 @@ def create_project(project_name):
     ## save the Settings file againg
     wb.save(Path(project_name).joinpath('Settings.xlsx'))
     writer.close()
+
+    ## give user output
+    print('{}: {} created as a new project.'.format(datetime.datetime.now().strftime("%H:%M:%S"), project_name)
