@@ -32,4 +32,4 @@ setuptools.setup(
             "apscale = apscale.__main__:main",
         ]
     },
-)0
+)
