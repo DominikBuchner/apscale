@@ -78,4 +78,4 @@ def create_project(project_name):
     writer.close()
 
     ## give user output
-    print('{}: {} created as a new project.'.format(datetime.datetime.now().strftime("%H:%M:%S"), project_name)
+    print('{}: "{}" created as a new project.'.format(datetime.datetime.now().strftime("%H:%M:%S"), project_name))
