@@ -141,7 +141,7 @@ def main(project = Path.cwd()):
 
     ## add log to the project report
     wb = openpyxl.load_workbook(Path(project).joinpath('Project_report.xlsx'))
-    writer = pd.ExcelWriter(Path(project).joinpath('Project_report.xlsx'))
+    writer = pd.ExcelWriter(Path(project).joinpath('Project_report.xlsx'), engine = 'openpyxl')
     writer.book = wb
 
     ## write the output

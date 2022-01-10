@@ -33,7 +33,7 @@ def create_project(project_name):
     ws = wb.active
     wb.save(Path(project_name).joinpath('Settings.xlsx'))
     wb = openpyxl.load_workbook(Path(project_name).joinpath('Settings.xlsx'))
-    writer = pd.ExcelWriter(Path(project_name).joinpath('Settings.xlsx'))
+    writer = pd.ExcelWriter(Path(project_name).joinpath('Settings.xlsx'), engine = 'openpyxl')
     writer.book = wb
     del wb['Sheet']
 
