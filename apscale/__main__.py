@@ -1,12 +1,12 @@
 import argparse
 from apscale import A_create_project
 
+## initialize the parse and display default behavior if called without arguments
 parser = argparse.ArgumentParser(prog = 'apscale', description = 'To be done!')
 parser.set_defaults(func = lambda x: parser.print_help())
 
-subparser = parser.add_subparsers(dest = 'test')
-
-parser_create_project = subparser.add_parser('create project')
-
+## parse command line arguments
 args = parser.parse_args()
+
+## display help when no argument is called
 args.func(args)
