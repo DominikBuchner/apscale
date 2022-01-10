@@ -98,5 +98,6 @@ def main():
     if len(sys.argv) == 1:
         args.func(args)
         sys.exit()
+
 if __name__ == "__main__":
     main()
