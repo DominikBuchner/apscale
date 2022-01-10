@@ -4,7 +4,7 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name="boldigger-cline",
+    name="apscale",
     version="1.0.0",
     author="Dominik Buchner",
     author_email="dominik.buchner524@googlemail.com",
