@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="apscale",
-    version="1.0.0",
+    version="1.0.1",
     author="Dominik Buchner",
     author_email="dominik.buchner524@googlemail.com",
     description="Advanced Pipeline for Simple yet Comprehensive AnaLysEs of DNA metabarcoding data",
@@ -19,14 +19,15 @@ setuptools.setup(
                         'pandas >= 1.2.1',
                         'demultiplexer >= 1.1.0',
                         'joblib >= 1.0.0',
-                        'biopython >= 1.78'],
+                        'biopython >= 1.78',
+                        'cutadapt >= 3.5'],
     include_package_data = False,
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires='>=3.8',
+    python_requires='>=3.7',
     entry_points = {
         "console_scripts" : [
             "apscale = apscale.__main__:main",
