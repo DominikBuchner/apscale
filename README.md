@@ -87,7 +87,7 @@ C:\USERS\DOMINIK\DESKTOP\EXAMPLE_PROJECT
 
 A new project can be initialized with the command:
 
-`appscale --create_project NAME`
+`apscale --create_project NAME`
 
 If you prefer to have your data all in one place you can paste the raw data into 1_raw_data/data.
 Demultiplexing won't be handled by Apscale because there are to many different tagging systems out there at the moment.
@@ -97,3 +97,4 @@ If you are already starting with **demultiplexed** data please paste them into 2
 ### Configuring the settings
 
 Associated with every project Apscale with generate an Excel sheet in the project folder called "Settings.xlsx".
+It is divided into a seperate sheet for every module and a 0_general_settings tab.
