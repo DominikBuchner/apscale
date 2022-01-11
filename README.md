@@ -58,3 +58,29 @@ Compiled with support for bzip2-compressed files, but the library was not found.
 ```
 
 ## How to use
+
+### Create a new apscale project
+
+Apscale is oranized in projects with the following structure.
+
+<pre>
+C:\USERS\DOMINIK\DESKTOP\EXAMPLE_PROJECT
+├───1_raw data
+│   └───data
+├───2_demultiplexing
+│   └───data
+├───3_PE_merging
+│   └───data
+├───4_primer_trimming
+│   └───data
+├───5_quality_filtering
+│   └───data
+├───6_dereplication_pooling
+│   └───data
+│       ├───dereplication
+│       └───pooling
+├───7_otu_clustering
+│   └───data
+└───8_denoising
+    └───data
+</pre>
