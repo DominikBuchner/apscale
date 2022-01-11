@@ -33,4 +33,28 @@ vsearch, for Windows the zlib.dll can be downloaded via:
 
 [zlib for Windows](https://sourceforge.net/projects/mingw-w64/files/External%20binary%20packages%20%28Win64%20hosted%29/Binaries%20%2864-bit%29/zlib-1.2.5-bin-x64.zip/download)
 
+The dll has to be in the same folder as the vsearch executable. If you need help with adding a folder to PATH in windows
+please take a look at the first answer on this stackoverflow issue:
+
+[How to add a folder to PATH Windows](https://stackoverflow.com/questions/44272416/how-to-add-a-folder-to-path-environment-variable-in-windows-10-with-screensho)
+
+To check if everything is correctly set up please type this into your command line:
+
+`vsearch --version`
+
+It should return a message similar to this:
+
+```
+vsearch v2.19.0_win_x86_64, 31.9GB RAM, 24 cores
+https://github.com/torognes/vsearch
+
+Rognes T, Flouri T, Nichols B, Quince C, Mahe F (2016)
+VSEARCH: a versatile open source tool for metagenomics
+PeerJ 4:e2584 doi: 10.7717/peerj.2584 https://doi.org/10.7717/peerj.2584
+
+Compiled with support for gzip-compressed files, and the library is loaded.
+zlib version 1.2.5, compile flags 65
+Compiled with support for bzip2-compressed files, but the library was not found.
+```
+
 ## How to use
