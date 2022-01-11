@@ -61,7 +61,7 @@ Compiled with support for bzip2-compressed files, but the library was not found.
 
 ### Create a new apscale project
 
-Apscale is oranized in projects with the following structure.
+Apscale is oranized in projects with the following structure:
 
 <pre>
 C:\USERS\DOMINIK\DESKTOP\EXAMPLE_PROJECT
@@ -84,3 +84,16 @@ C:\USERS\DOMINIK\DESKTOP\EXAMPLE_PROJECT
 └───8_denoising
     └───data
 </pre>
+
+A new project can be initialized with the command:
+
+`appscale --create_project NAME`
+
+If you prefer to have your data all in one place you can paste the raw data into 1_raw_data/data.
+Demultiplexing won't be handled by Apscale because there are to many different tagging systems out there at the moment.
+If you are using inline barcodes you can take a look at https://github.com/DominikBuchner/demultiplexer.
+If you are already starting with **demultiplexed** data please paste them into 2_demultiplexing/data.
+
+### Configuring the settings
+
+Associated with every project Apscale with generate an Excel sheet in the project folder called "Settings.xlsx".
