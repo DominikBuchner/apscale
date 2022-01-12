@@ -17,6 +17,10 @@ def denoise(project = None, comp_lvl = None, cores = None, alpha = None, minsize
     ## give user output
     print('{}: Starting denoising. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
 
+    ## reduce cores to 75% of available ressources to prevent overheating while clustering / denoising:
+    if cores > int(psutil.cpu_count() * 0.75):
+        cores = int(psutil.cpu_count() * 0.75)
+
     ## run vsearch --cluster_unoise to cluster OTUs
     ## use --log because for some reason no info is written to stderr with this command
     f = subprocess.run(['vsearch',

@@ -1,4 +1,4 @@
-import subprocess, gzip, datetime, os, subprocess, pickle, glob, openpyxl, shutil
+import subprocess, gzip, datetime, os, subprocess, pickle, glob, openpyxl, shutil, psutil
 import pandas as pd
 import numpy as np
 from Bio import SeqIO
@@ -17,6 +17,10 @@ def otu_clustering(project = None, comp_lvl = None, cores = None, pct_id = None)
 
     ## give user output
     print('{}: Starting OTU clustering. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+
+    ## reduce cores to 75% of available ressources to prevent overheating while clustering / denoising:
+    if cores > int(psutil.cpu_count() * 0.75):
+        cores = int(psutil.cpu_count() * 0.75)
 
     ## run vsearch --cluster_size to cluster OTUs
     ## use --log because for some reason no info is written to stderr with this command
