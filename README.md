@@ -19,7 +19,7 @@ To update apscale run:
 
 `pip install --upgrade apscale`
 
-### Further dependencies
+### Further dependencies - vsearch
 
 Apscale calls vsearch for multiple modules. It should be installed and be in PATH to be executed
 from anywhere on the system.
@@ -57,11 +57,22 @@ zlib version 1.2.5, compile flags 65
 Compiled with support for bzip2-compressed files, but the library was not found.
 ```
 
+### Further dependencies - cutadapt
+
+Apscale also calls cutadapt with some modules. Cutadapt should be downloaded and installed
+automatically with the Apscale installation. To check this, type:
+
+`cutadapt --version`
+
+and it should return the version number. For my system this is:
+
+`3.5`
+
 ## How to use
 
 ### Create a new apscale project
 
-Apscale is oranized in projects with the following structure:
+Apscale is organized in projects with the following structure:
 
 <pre>
 C:\USERS\DOMINIK\DESKTOP\EXAMPLE_PROJECT
@@ -89,12 +100,14 @@ A new project can be initialized with the command:
 
 `apscale --create_project NAME`
 
-If you prefer to have your data all in one place you can paste the raw data into 1_raw_data/data.
+If you prefer to have your data all in one place you can copy the raw data into 1_raw_data/data.
 Demultiplexing won't be handled by Apscale because there are to many different tagging systems out there at the moment.
 If you are using inline barcodes you can take a look at https://github.com/DominikBuchner/demultiplexer.
-If you are already starting with **demultiplexed** data please paste them into 2_demultiplexing/data.
+If you are already starting with **demultiplexed** data please copy them into 2_demultiplexing/data.
 
 ### Configuring the settings
 
 Associated with every project Apscale with generate an Excel sheet in the project folder called "Settings.xlsx".
-It is divided into a seperate sheet for every module and a 0_general_settings tab.
+It is divided into a seperate sheets for every module and a 0_general_settings tab.
+By default Apscale will set 'cores to use' to all available cores on the system the project is created - 2 but this can be lowered
+if the capacity is needed for other processes on your computer. 
