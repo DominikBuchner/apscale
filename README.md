@@ -105,9 +105,19 @@ Demultiplexing won't be handled by Apscale because there are to many different t
 If you are using inline barcodes you can take a look at https://github.com/DominikBuchner/demultiplexer.
 If you are already starting with **demultiplexed** data please copy them into 2_demultiplexing/data.
 
-### Configuring the settings
+### Configuring the general settings
 
 Associated with every project Apscale with generate an Excel sheet in the project folder called "Settings.xlsx".
 It is divided into a seperate sheets for every module and a 0_general_settings tab.
 By default Apscale will set 'cores to use' to all available cores on the system the project is created - 2 but this can be lowered
-if the capacity is needed for other processes on your computer. 
+if the capacity is needed for other processes on your computer.
+Apscale only works with compressed data, so it takes compressed data as input and has compressed data as output.
+The compression level can be set in the general settings as well. Its default value is 6 since this is the default value of gzip.
+The higher the compression level, the longer Apscale will take to process the data and vice versa, so if runtime is an issue you can
+lower the compression level and if disk space is a concern the compression level can be set to 9 as maximum value.
+
+### Configuring the specific settings
+
+Apscale gives default values for most of its settings. They can be changed if desired, please refer to the manual of vsearch and cutadapt
+for further information. The only value Apscale needs from the user is the primers used and the expected length of the fragment excluding which is used
+for quality filtering. 
