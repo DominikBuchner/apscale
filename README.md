@@ -131,7 +131,7 @@ Navigate to the project folder you would like to process. Apscale can be run fro
 Will give help on the different functions of apscale.
 To run an all in one analysis on your dataset run
 
-`apscale --run_apscale`
+`apscale --run_apscale [PATH]`
 
 This will automatically do PE merging, primer trimming, quality filter, OTU clustering and denoising of the data.
 The individual modules can also be run the same way. A project report will be saved in the project folder as well as an individual
