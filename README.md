@@ -120,4 +120,22 @@ lower the compression level and if disk space is a concern the compression level
 
 Apscale gives default values for most of its settings. They can be changed if desired, please refer to the manual of vsearch and cutadapt
 for further information. The only value Apscale needs from the user is the primers used and the expected length of the fragment excluding which is used
-for quality filtering. 
+for quality filtering. After these are set Apscale is ready to run!
+
+### Running Apscale
+
+Navigate to the project folder you would like to process. Apscale can be run from anywhere on the system but then needs a PATH to the project folder.
+
+`apscale -h`
+
+Will give help on the different functions of apscale.
+To run an all in one analysis on your dataset run
+
+`apscale --run_apscale`
+
+This will automatically do PE merging, primer trimming, quality filter, OTU clustering and denoising of the data.
+The individual modules can also be run the same way. A project report will be saved in the project folder as well as an individual
+report for the individual steps of the pipeline.
+
+Apscale will output an OTU table, ans ESV table as well as 2 .fasta files which can be used for taxnomic assignment. For example, for COI
+BOLDigger (https://github.com/DominikBuchner/BOLDigger) can be used directly with the output of Apscale to assign taxomoy to the OTUs / ESVs.
