@@ -64,7 +64,7 @@ automatically with the Apscale installation. To check this, type:
 
 `cutadapt --version`
 
-and it should return the version number. For my system this is:
+and it should return the version number, for example:
 
 `3.5`
 
@@ -107,24 +107,24 @@ If you are already starting with **demultiplexed** data please copy them into 2_
 
 ### Configuring the general settings
 
-Associated with every project Apscale with generate an Excel sheet in the project folder called "Settings.xlsx".
-It is divided into a seperate sheets for every module and a 0_general_settings tab.
-By default Apscale will set 'cores to use' to all available cores on the system the project is created - 2 but this can be lowered
+Associated with every newly created project, Apscale will generate an Excel sheet in the project folder called "Settings.xlsx".
+It is divided into seperate sheets for every module and a 0_general_settings tab.
+By default Apscale will set 'cores to use' to all available cores on the system the project is created - 2, but this can be lowered
 if the capacity is needed for other processes on your computer.
 Apscale only works with compressed data, so it takes compressed data as input and has compressed data as output.
 The compression level can be set in the general settings as well. Its default value is 6 since this is the default value of gzip.
-The higher the compression level, the longer Apscale will take to process the data and vice versa, so if runtime is an issue you can
-lower the compression level and if disk space is a concern the compression level can be set to 9 as maximum value.
+The higher the compression level, the longer Apscale will take to process the data and vice versa, so if runtime is an issue, you can
+lower the compression level and if disk space is a concern, the compression level can be set to 9 as maximum value.
 
 ### Configuring the specific settings
 
 Apscale gives default values for most of its settings. They can be changed if desired, please refer to the manual of vsearch and cutadapt
 for further information. The only value Apscale needs from the user is the primers used and the expected length of the fragment excluding which is used
-for quality filtering. After these are set Apscale is ready to run!
+for quality filtering. After these are set, Apscale is ready to run!
 
 ### Running Apscale
 
-Navigate to the project folder you would like to process. Apscale can be run from anywhere on the system but then needs a PATH to the project folder.
+Navigate to the project folder you would like to process. Apscale can be run from anywhere on the system, but then needs a PATH to the project folder.
 
 `apscale -h`
 
@@ -137,5 +137,5 @@ This will automatically do PE merging, primer trimming, quality filter, OTU clus
 The individual modules can also be run the same way. A project report will be saved in the project folder as well as an individual
 report for the individual steps of the pipeline.
 
-Apscale will output an OTU table, ans ESV table as well as 2 .fasta files which can be used for taxnomic assignment. For example, for COI
-BOLDigger (https://github.com/DominikBuchner/BOLDigger) can be used directly with the output of Apscale to assign taxomoy to the OTUs / ESVs.
+Apscale will output an OTU table and an ESV table, as well as two .fasta files, which can be used for taxnomic assignment. For example, for COI sequences, 
+BOLDigger (https://github.com/DominikBuchner/BOLDigger) can be used directly with the output of Apscale to assign taxomoy to the OTUs / ESVs using the Barcode of Life Data system (BOLD) database.
