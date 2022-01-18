@@ -111,7 +111,7 @@ A new project can be initialized with the command:
 `apscale --create_project NAME`
 
 If you prefer to have your data all in one place you can copy the raw data into 1_raw_data/data.
-Demultiplexing won't be handled by Apscale because there are to many different tagging systems out there at the moment.
+Demultiplexing won't be handled by Apscale because there are to many different tagging systems out there to implement in a single pipeline.
 If you are using inline barcodes you can take a look at https://github.com/DominikBuchner/demultiplexer.
 If you are already starting with **demultiplexed** data please copy them into 2_demultiplexing/data.
 
@@ -139,13 +139,14 @@ Navigate to the project folder you would like to process. Apscale can be run fro
 `apscale -h`
 
 Will give help on the different functions of apscale.
-To run an all in one analysis on your dataset run
+To run an all-in-one analysis on your dataset run:
 
 `apscale --run_apscale [PATH]`
 
+The PATH argument is optional and only needs to be used if you are not located in the project folder.
 This will automatically do PE merging, primer trimming, quality filter, OTU clustering and denoising of the data.
-The individual modules can also be run the same way. A project report will be saved in the project folder as well as an individual
-report for the individual steps of the pipeline.
+The individual modules can also be run separately (see `apscale -h` for respective commands). A project report will be saved in the project folder as well as an individual
+report for the individual steps of the pipeline. Information about the versions of the programs used as well as how many reads where used and passed the module as well as a timestamp when the file finished.
 
-Apscale will output an OTU table and an ESV table, as well as two .fasta files, which can be used for taxnomic assignment. For example, for COI sequences,
+The main output of Apscale will be an OTU table and an ESV table, as well as two .fasta files, which can be used for taxnomic assignment. For example, for COI sequences,
 BOLDigger (https://github.com/DominikBuchner/BOLDigger) can be used directly with the output of Apscale to assign taxomoy to the OTUs / ESVs using the Barcode of Life Data system (BOLD) database.
