@@ -6,7 +6,17 @@ Apscale is a metabarcoding pipeline that handles the most common tasks in metaba
 pipelines like paired-end merging, primer trimming, quality filtering, otu clustering and
 denoising. It uses a simple command line interface and is configured via a single configuration file.
 It automatically uses the available ressources on the machine it runs on while still providing the option
-to use less if desired.
+to use less if desired. All modules can be run on their own or as a comprehensive workflow.
+
+Programs used:
+* vsearch (PE merging, quality filtering, otu clustering, denoising)
+* cutadapt (primer trimming)
+
+Input:
+* demultiplexed gzipped reads
+
+Output:
+* log files, project report, OTU/ESV table
 
 ## Installation
 
@@ -137,5 +147,5 @@ This will automatically do PE merging, primer trimming, quality filter, OTU clus
 The individual modules can also be run the same way. A project report will be saved in the project folder as well as an individual
 report for the individual steps of the pipeline.
 
-Apscale will output an OTU table and an ESV table, as well as two .fasta files, which can be used for taxnomic assignment. For example, for COI sequences, 
+Apscale will output an OTU table and an ESV table, as well as two .fasta files, which can be used for taxnomic assignment. For example, for COI sequences,
 BOLDigger (https://github.com/DominikBuchner/BOLDigger) can be used directly with the output of Apscale to assign taxomoy to the OTUs / ESVs using the Barcode of Life Data system (BOLD) database.
