@@ -13,11 +13,12 @@ def dereplication(file, project = None, comp_lvl = None):
 
     ## run vsearch --derep_fulllength to dereplicate the file
     ## use --log because for some reason no info is written to stderr with this command
+    ## relabel to handle to different sequencing runs in the otu clustering - seems to only happen if data is downloaded from SRA
     f = subprocess.run(['vsearch',
                         '--derep_fulllength', Path(file),
                         '--output', '-', '--quiet', '--fasta_width', str(0),
                         '--log', Path(project).joinpath('6_dereplication_pooling', 'temp', '{}.txt'.format(sample_name_out)),
-                        '--sizeout'], capture_output = True)
+                        '--sizeout', '--relabel', 'seq:'], capture_output = True)
 
     ## write gzipped output so save space
     with gzip.open(Path(project).joinpath('6_dereplication_pooling', 'data', 'dereplication', sample_name_out), 'wb', comp_lvl) as out:
