@@ -40,10 +40,7 @@ def primer_trimming(file, project = None, p5_primer = None, p7_primer = None, an
 
     ## get remainind log information, pickle temporarly to write the log after successfull finish
     py_v = sys.version_info
-    py_v = '.'.join(py_v.major, py_v.minor, py_v.micro)
-
-    # py_v = subprocess.run(['python', '--version'], capture_output = True)
-    # py_v = py_v.stdout.decode('ascii', errors = 'ignore').rstrip()
+    py_v = '.'.join((str(py_v.major), str(py_v.minor), str(py_v.micro)))
 
     cutadapt_v = subprocess.run(['cutadapt', '--version'], capture_output = True)
     cutadapt_v = cutadapt_v.stdout.decode('ascii', errors = 'ignore').rstrip()
