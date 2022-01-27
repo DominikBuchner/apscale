@@ -13,28 +13,33 @@ def otu_clustering(project = None, comp_lvl = None, cores = None, pct_id = None)
     with all centroid sequences."""
 
     ## define the name for the output fasta
+    ## create an output path to write to
     sample_name_out_1 = 'OTUs_with_chimeras.fasta.gz'
+    output_path = Path(project).joinpath('7_otu_clustering', 'data', sample_name_out_1)
 
     ## give user output
     print('{}: Starting OTU clustering. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
 
     ## reduce cores to 75% of available ressources to prevent overheating while clustering / denoising:
-    if cores > int(psutil.cpu_count() * 0.75):
-        cores = int(psutil.cpu_count() * 0.75)
+    if cores > int(psutil.cpu_count() * 0.5):
+        cores = int(psutil.cpu_count() * 0.5)
 
     ## run vsearch --cluster_size to cluster OTUs
     ## use --log because for some reason no info is written to stderr with this command
-    f = subprocess.run(['vsearch',
-                        '--cluster_size', Path(project).joinpath('6_dereplication_pooling', 'data', 'pooling', 'pooled_sequences_dereplicated.fasta.gz'),
-                        '--id', str(pct_id / 100),
-                        '--sizein', '--sizeout', '--relabel', 'OTU_',
-                        '--centroids', '-', '--fasta_width', str(0), '--quiet',
-                        '--log', Path(project).joinpath('7_otu_clustering', 'temp', 'clustering_log.txt'),
-                        '--threads', str(cores)], capture_output = True)
+    ## write stdout to uncompressed output at runtime
+    with open(output_path.with_suffix(''), 'w') as output:
+        f = subprocess.run(['vsearch',
+                            '--cluster_size', Path(project).joinpath('6_dereplication_pooling', 'data', 'pooling', 'pooled_sequences_dereplicated.fasta.gz'),
+                            '--id', str(pct_id / 100),
+                            '--sizein', '--sizeout', '--relabel', 'OTU_',
+                            '--centroids', '-', '--fasta_width', str(0), '--quiet',
+                            '--log', Path(project).joinpath('7_otu_clustering', 'temp', 'clustering_log.txt'),
+                            '--threads', str(cores)], stdout = output)
 
-    # write gzipped output so save space
-    with gzip.open(Path(project).joinpath('7_otu_clustering', 'data', sample_name_out_1), 'wb', comp_lvl) as out:
-        out.write(f.stdout)
+    ## compress the output, remove uncompressed output
+    with open(output_path.with_suffix(''), 'rb') as in_stream, gzip.open(output_path, 'wb', comp_lvl) as out_stream:
+            shutil.copyfileobj(in_stream, out_stream)
+    os.remove(output_path.with_suffix(''))
 
     ## collect processed and passed reads from the log file
     with open(Path(project).joinpath('7_otu_clustering', 'temp', 'clustering_log.txt')) as log_file:

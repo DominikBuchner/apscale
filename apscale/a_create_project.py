@@ -38,7 +38,7 @@ def create_project(project_name):
     del wb['Sheet']
 
     ## write the 3_PE_merging sheet
-    df_0 = pd.DataFrame([[psutil.cpu_count() - 2, 6]],
+    df_0 = pd.DataFrame([[int(psutil.cpu_count() * 0.75), 6]],
                         columns = ['cores to use', 'compression level'])
 
     df_0.to_excel(writer, sheet_name = '0_general_settings', index = False)

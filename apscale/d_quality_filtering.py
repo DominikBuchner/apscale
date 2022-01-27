@@ -9,22 +9,27 @@ def quality_filtering(file, project = None, comp_lvl = None, maxee = None, min_l
     with quality filtered reads. Filtered reads will be discarded."""
 
     ## extract the filename from the sample path / name and convert to output name
+    ## create an output path to write to
     sample_name_out = '{}_filtered.fasta.gz'.format(Path(file).with_suffix('').with_suffix('').name)
+    output_path = Path(project).joinpath('5_quality_filtering', 'data', sample_name_out)
 
     # run vsearch --fastq_filter to apply the quality filtering
     # use --log because for some reason no info is written to stderr with this command
-    f = subprocess.run(['vsearch',
-                        '--fastq_filter', Path(file),
-                        '--fastaout', '-', '--quiet', '--fasta_width', str(0),
-                        '--log', Path(project).joinpath('5_quality_filtering', 'temp', '{}.txt'.format(sample_name_out)),
-                        '--fastq_maxee', str(maxee),
-                        '--fastq_minlen', str(min_length),
-                        '--fastq_maxlen', str(max_length),
-                        '--fastq_qmax', str(64)], capture_output = True)
+    # write stdout to uncompressed output at runtime, write stderr to a log file
+    with open(output_path.with_suffix(''), 'w') as output:
+        f = subprocess.run(['vsearch',
+                            '--fastq_filter', Path(file),
+                            '--fastaout', '-', '--quiet', '--fasta_width', str(0),
+                            '--log', Path(project).joinpath('5_quality_filtering', 'temp', '{}.txt'.format(sample_name_out)),
+                            '--fastq_maxee', str(maxee),
+                            '--fastq_minlen', str(min_length),
+                            '--fastq_maxlen', str(max_length),
+                            '--fastq_qmax', str(64)], stdout = output)
 
-    ## write gzipped output so save space
-    with gzip.open(Path(project).joinpath('5_quality_filtering', 'data', sample_name_out), 'wb', comp_lvl) as out:
-        out.write(f.stdout)
+    ## compress the output, remove uncompressed output
+    with open(output_path.with_suffix(''), 'rb') as in_stream, gzip.open(output_path, 'wb', comp_lvl) as out_stream:
+            shutil.copyfileobj(in_stream, out_stream)
+    os.remove(output_path.with_suffix(''))
 
     ## collect processed and passed reads from the log file
     with open(Path(project).joinpath('5_quality_filtering', 'temp', '{}.txt'.format(sample_name_out))) as log_file:

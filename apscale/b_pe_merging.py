@@ -10,27 +10,30 @@ def pe_merge(file_pair, project = None, comp_lvl = None, maxdiffpct = None, maxd
     a gzipped file containing the merged reads."""
 
     ## extract the filename from the sample path / name and convert to output name
+    ## create an output path to write to
     sample_name_out = '{}_PE.fastq.gz'.format('_'.join(Path(file_pair[0]).name.split('_')[:-1]))
+    output_path = Path(project).joinpath('3_PE_merging', 'data', sample_name_out)
+    log_path = Path(project).joinpath('3_PE_merging', 'temp', '{}_log.txt'.format(sample_name_out))
 
-    ## run vsearch --fastq_mergepairs to merge the file pair
-    f = subprocess.run(['vsearch',
-                        '--fastq_mergepairs', Path(file_pair[0]),
-                        '--reverse', Path(file_pair[1]),
-                        '--fastqout', '-', '--quiet',
-                        '--fastq_maxdiffpct', str(maxdiffpct),
-                        '--fastq_maxdiffs', str(maxdiffs),
-                        '--fastq_minovlen', str(minovlen),
-                        '--fastq_allowmergestagger',
-                        '--threads', str(1)], capture_output = True)
+    ## write stdout to uncompressed output at runtime, write stderr to a log file
+    with open(output_path.with_suffix(''), 'w') as output, open(log_path, 'w') as log:
+        ## run vsearch --fastq_mergepairs to merge the file pair
+        f = subprocess.run(['vsearch',
+                            '--fastq_mergepairs', Path(file_pair[0]),
+                            '--reverse', Path(file_pair[1]),
+                            '--fastqout', '-', '--quiet',
+                            '--fastq_maxdiffpct', str(maxdiffpct),
+                            '--fastq_maxdiffs', str(maxdiffs),
+                            '--fastq_minovlen', str(minovlen),
+                            '--fastq_allowmergestagger',
+                            '--threads', str(1)], stdout = output, stderr = log)
 
-    ## write output to gzipped file, always same folder if run from the project
-    with gzip.open(Path(project).joinpath('3_PE_merging', 'data', sample_name_out), 'wb', comp_lvl) as out:
-        out.write(f.stdout)
+    ## compress the output, remove uncompressed output
+    with open(output_path.with_suffix(''), 'rb') as in_stream, gzip.open(output_path, 'wb', comp_lvl) as out_stream:
+            shutil.copyfileobj(in_stream, out_stream)
+    os.remove(output_path.with_suffix(''))
 
-    ## collect processed reads and merged reads from stderr, save finishing time and date
-    with open(Path(project).joinpath('3_PE_merging', 'temp', '{}_log.txt'.format(sample_name_out)), 'wb') as out:
-        out.write(f.stderr)
-
+    ## read run info from log file
     with open(Path(project).joinpath('3_PE_merging', 'temp', '{}_log.txt'.format(sample_name_out)), 'rt') as log_file:
         content = log_file.read()
         reads, merged = int(content.split('\n')[0][:10]), int(content.split('\n')[1][:10])

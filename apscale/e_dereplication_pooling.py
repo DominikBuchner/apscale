@@ -9,20 +9,25 @@ def dereplication(file, project = None, comp_lvl = None):
     written to the output fasta."""
 
     ## extract the filename from the sample path / name and convert to output name
+    ## create an output path to write to
     sample_name_out = '{}_dereplicated.fasta.gz'.format(Path(file).with_suffix('').with_suffix('').name)
+    output_path = Path(project).joinpath('6_dereplication_pooling', 'data', 'dereplication', sample_name_out)
 
     ## run vsearch --derep_fulllength to dereplicate the file
     ## use --log because for some reason no info is written to stderr with this command
     ## relabel to handle to different sequencing runs in the otu clustering - seems to only happen if data is downloaded from SRA
-    f = subprocess.run(['vsearch',
-                        '--derep_fulllength', Path(file),
-                        '--output', '-', '--quiet', '--fasta_width', str(0),
-                        '--log', Path(project).joinpath('6_dereplication_pooling', 'temp', '{}.txt'.format(sample_name_out)),
-                        '--sizeout', '--relabel', 'seq:'], capture_output = True)
+    ## write stdout to uncompressed output at runtime
+    with open(output_path.with_suffix(''), 'w') as output:
+        f = subprocess.run(['vsearch',
+                            '--derep_fulllength', Path(file),
+                            '--output', '-', '--quiet', '--fasta_width', str(0),
+                            '--log', Path(project).joinpath('6_dereplication_pooling', 'temp', '{}.txt'.format(sample_name_out)),
+                            '--sizeout', '--relabel', 'seq:'], stdout = output)
 
-    ## write gzipped output so save space
-    with gzip.open(Path(project).joinpath('6_dereplication_pooling', 'data', 'dereplication', sample_name_out), 'wb', comp_lvl) as out:
-        out.write(f.stdout)
+    ## compress the output, remove uncompressed output
+    with open(output_path.with_suffix(''), 'rb') as in_stream, gzip.open(output_path, 'wb', comp_lvl) as out_stream:
+        shutil.copyfileobj(in_stream, out_stream)
+    os.remove(output_path.with_suffix(''))
 
     ## collect processed and passed reads from the log file
     with open(Path(project).joinpath('6_dereplication_pooling', 'temp', '{}.txt'.format(sample_name_out))) as log_file:
@@ -55,15 +60,19 @@ def pooling(file_list, project = None, comp_lvl = None):
     print('{}: Dereplicating the pooled sequences for clustering and denoising.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
 
     ## run vsearch --derep_fulllength to dereplicate the file
-    f = subprocess.run(['vsearch',
-                        '--derep_fulllength', Path(project).joinpath('6_dereplication_pooling', 'data', 'pooling', 'pooled_sequences.fasta.gz'),
-                        '--output', '-', '--quiet', '--fasta_width', str(0),
-                        '--sizein', '--sizeout',
-                        '--minuniquesize', str(2)], capture_output = True)
+    output_path = Path(project).joinpath('6_dereplication_pooling', 'data', 'pooling', 'pooled_sequences_dereplicated.fasta.gz')
 
-    ## write gzipped output so save space
-    with gzip.open(Path(project).joinpath('6_dereplication_pooling', 'data', 'pooling', 'pooled_sequences_dereplicated.fasta.gz'), 'wb', comp_lvl) as out:
-        out.write(f.stdout)
+    with open(output_path.with_suffix(''), 'w') as output:
+        f = subprocess.run(['vsearch',
+                            '--derep_fulllength', Path(project).joinpath('6_dereplication_pooling', 'data', 'pooling', 'pooled_sequences.fasta.gz'),
+                            '--output', '-', '--quiet', '--fasta_width', str(0),
+                            '--sizein', '--sizeout',
+                            '--minuniquesize', str(2)], stdout = output)
+
+    ## compress the output, remove uncompressed output
+    with open(output_path.with_suffix(''), 'rb') as in_stream, gzip.open(output_path, 'wb', comp_lvl) as out_stream:
+        shutil.copyfileobj(in_stream, out_stream)
+    os.remove(output_path.with_suffix(''))
 
 ## main function to call the script
 def main(project = Path.cwd()):
