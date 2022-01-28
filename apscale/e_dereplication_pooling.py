@@ -19,8 +19,8 @@ def dereplication(file, project = None, comp_lvl = None):
     ## write stdout to uncompressed output at runtime
     with open(output_path.with_suffix(''), 'w') as output:
         f = subprocess.run(['vsearch',
-                            '--derep_fulllength', Path(file),
-                            '--output', '-', '--quiet', '--fasta_width', str(0),
+                            '--fastx_uniques', Path(file),
+                            '--fastaout', '-', '--quiet', '--fasta_width', str(0),
                             '--log', Path(project).joinpath('6_dereplication_pooling', 'temp', '{}.txt'.format(sample_name_out)),
                             '--sizeout', '--relabel', 'seq:'], stdout = output)
 
