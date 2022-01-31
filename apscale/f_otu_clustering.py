@@ -6,6 +6,8 @@ from joblib import Parallel, delayed
 from pathlib import Path
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 from io import StringIO
+from tqdm import tqdm
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 ## clustering function to cluster all sequences in input fasta with given pct_id
 def otu_clustering(project = None, comp_lvl = None, cores = None, pct_id = None):
@@ -162,22 +164,34 @@ def main(project = Path.cwd()):
     ## generate OTU table, first extract all OTUs and sequences from fasta file
     otu_list = list(SimpleFastaParser(open(Path(project).joinpath('7_otu_clustering', '{}_OTUs.fasta'.format(Path(project).stem)))))
     otu_table = pd.DataFrame(otu_list, columns = ['ID', 'Seq'])
+    seq_col = otu_table.pop('Seq')
 
-    ## add all samples to the otu table
+    ## add all samples to the otu table, replace np.nan values with 0
     otu_tabs = glob.glob(str(Path(project).joinpath('7_otu_clustering', 'temp', '*_otu_tab.pkl')))
 
     for tab_file in otu_tabs:
         tab = pickle.load(open(tab_file, 'rb'))
         name, data = tab.columns[-1], dict(zip(tab.iloc[:, 0].values, tab.iloc[:, 1].values))
-        otu_table[name] = otu_table['ID'].map(data)
+        otu_table[name] = otu_table['ID'].map(data).replace(np.nan, 0)
 
-    ## move sequences to the end of the dataframe, replace np.nan values with 0
-    seq_col = otu_table.pop('Seq')
+    ## move sequences to the end of the dataframe
     otu_table.insert(len(otu_table.columns), 'Seq', seq_col)
-    otu_table = otu_table.replace(np.nan, 0)
 
     ## save the final OTU table
-    otu_table.to_excel(Path(project).joinpath('7_otu_clustering', '{}_OTU_table.xlsx'.format(Path(project).stem)), index = False)
+    wb = openpyxl.Workbook(write_only = True)
+    ws = wb.create_sheet('OTU table')
+
+    ## save the output line by line for optimized memory usage
+    for row in tqdm(dataframe_to_rows(otu_table, index = False, header = True),
+                                      total = len(otu_table.index),
+                                      desc = '{}: Lines written to OTU table'.format(datetime.datetime.now().strftime("%H:%M:%S")),
+                                      unit = ' lines'):
+        ws.append(row)
+
+    ## save the output (otu table)
+    print('{}: Saving the OTU table. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+    wb.save(Path(project).joinpath('7_otu_clustering', '{}_OTU_table.xlsx'.format(Path(project).stem)))
+    wb.close()
     print('{}: OTU table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('7_otu_clustering', '{}_OTU_table.xlsx'.format(Path(project).stem))))
 
     ## remove temporary files

@@ -20,7 +20,8 @@ setuptools.setup(
                         'demultiplexer >= 1.1.0',
                         'joblib >= 1.0.0',
                         'biopython >= 1.78',
-                        'cutadapt >= 3.5'],
+                        'cutadapt >= 3.5',
+                        'tqdm >= 4.56.0'],
     include_package_data = False,
     classifiers=[
         "Programming Language :: Python :: 3",

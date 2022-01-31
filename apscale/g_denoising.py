@@ -5,6 +5,8 @@ from joblib import Parallel, delayed
 from pathlib import Path
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 from io import StringIO
+from tqdm import tqdm
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize
 def denoise(project = None, comp_lvl = None, cores = None, alpha = None, minsize = None):
@@ -161,6 +163,7 @@ def main(project = Path.cwd()):
     ## generate OTU table, first extract all OTUs and sequences from fasta file
     esv_list = list(SimpleFastaParser(open(Path(project).joinpath('8_denoising', '{}_ESVs.fasta'.format(Path(project).stem)))))
     esv_table = pd.DataFrame(esv_list, columns = ['ID', 'Seq'])
+    seq_col = esv_table.pop('Seq')
 
     ## add all samples to the ESV table
     esv_tabs = glob.glob(str(Path(project).joinpath('8_denoising', 'temp', '*_esv_tab.pkl')))
@@ -168,15 +171,26 @@ def main(project = Path.cwd()):
     for tab_file in esv_tabs:
         tab = pickle.load(open(tab_file, 'rb'))
         name, data = tab.columns[-1], dict(zip(tab.iloc[:, 0].values, tab.iloc[:, 1].values))
-        esv_table[name] = esv_table['ID'].map(data)
+        esv_table[name] = esv_table['ID'].map(data).replace(np.nan, 0)
 
     ## move sequences to the end of the dataframe, replace np.nan values with 0
-    seq_col = esv_table.pop('Seq')
     esv_table.insert(len(esv_table.columns), 'Seq', seq_col)
-    esv_table = esv_table.replace(np.nan, 0)
 
     ## save the final OTU table
-    esv_table.to_excel(Path(project).joinpath('8_denoising', '{}_ESV_table.xlsx'.format(Path(project).stem)), index = False)
+    wb = openpyxl.Workbook(write_only = True)
+    ws = wb.create_sheet('ESV table')
+
+    ## save the output line by line for optimized memory usage
+    for row in tqdm(dataframe_to_rows(esv_table, index = False, header = True),
+                                      total = len(esv_table.index),
+                                      desc = '{}: Lines written to ESV table'.format(datetime.datetime.now().strftime("%H:%M:%S")),
+                                      unit = ' lines'):
+        ws.append(row)
+
+    ## save the output (otu table)
+    print('{}: Saving the ESV table. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+    wb.save(Path(project).joinpath('8_otu_clustering', '{}_ESV_table.xlsx'.format(Path(project).stem)))
+    wb.close()
     print('{}: ESV table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('8_denoising', '{}_ESV_table.xlsx'.format(Path(project).stem))))
 
     ## remove temporary files
