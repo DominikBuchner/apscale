@@ -189,7 +189,7 @@ def main(project = Path.cwd()):
 
     ## save the output (otu table)
     print('{}: Saving the ESV table. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
-    wb.save(Path(project).joinpath('8_otu_clustering', '{}_ESV_table.xlsx'.format(Path(project).stem)))
+    wb.save(Path(project).joinpath('8_denoising', '{}_ESV_table.xlsx'.format(Path(project).stem)))
     wb.close()
     print('{}: ESV table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('8_denoising', '{}_ESV_table.xlsx'.format(Path(project).stem))))
 
