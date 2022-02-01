@@ -172,10 +172,10 @@ def main(project = Path.cwd()):
     for tab_file in otu_tabs:
         tab = pickle.load(open(tab_file, 'rb'))
         name, data = tab.columns[-1], dict(zip(tab.iloc[:, 0].values, tab.iloc[:, 1].values))
-        otu_table[name] = otu_table['ID'].map(data).replace(np.nan, 0)
 
     ## move sequences to the end of the dataframe
     otu_table.insert(len(otu_table.columns), 'Seq', seq_col)
+    otu_table.replace(np.nan, 0, inplace = True)
 
     ## save the final OTU table
     wb = openpyxl.Workbook(write_only = True)
