@@ -171,10 +171,11 @@ def main(project = Path.cwd()):
     for tab_file in esv_tabs:
         tab = pickle.load(open(tab_file, 'rb'))
         name, data = tab.columns[-1], dict(zip(tab.iloc[:, 0].values, tab.iloc[:, 1].values))
-        esv_table[name] = esv_table['ID'].map(data).replace(np.nan, 0)
+        esv_table[name] = esv_table['ID'].map(data)
 
     ## move sequences to the end of the dataframe, replace np.nan values with 0
     esv_table.insert(len(esv_table.columns), 'Seq', seq_col)
+    esv_table.replace(np.nan, 0, inplace = True)
 
     ## save the final OTU table
     wb = openpyxl.Workbook(write_only = True)
