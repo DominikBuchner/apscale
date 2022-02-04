@@ -8,6 +8,7 @@ from Bio.SeqIO.FastaIO import SimpleFastaParser
 from io import StringIO
 from tqdm import tqdm
 from openpyxl.utils.dataframe import dataframe_to_rows
+from functools import reduce
 
 ## clustering function to cluster all sequences in input fasta with given pct_id
 def otu_clustering(project = None, comp_lvl = None, cores = None, pct_id = None):
@@ -166,17 +167,17 @@ def main(project = Path.cwd()):
     otu_table = pd.DataFrame(otu_list, columns = ['ID', 'Seq'])
     seq_col = otu_table.pop('Seq')
 
-    ## add all samples to the otu table, replace np.nan values with 0
+    ## extract individual OTU tabs from the clustering output, rename columns correctly, insert the OTU table as first dataframe
     otu_tabs = glob.glob(str(Path(project).joinpath('7_otu_clustering', 'temp', '*_otu_tab.pkl')))
+    otu_tabs = [pickle.load(open(tab_file, 'rb')) for tab_file in otu_tabs]
+    otu_tabs = [tab.rename(columns = {tab.columns[0] : 'ID'}) for tab in otu_tabs]
+    otu_tabs.insert(0, otu_table)
 
-    for tab_file in otu_tabs:
-        tab = pickle.load(open(tab_file, 'rb'))
-        name, data = tab.columns[-1], dict(zip(tab.iloc[:, 0].values, tab.iloc[:, 1].values))
-        otu_table[name] = otu_table['ID'].map(data)
+    ## collapse all individual dataframes into the OTU table, replace nan values with 0
+    otu_table = reduce(lambda left, right: pd.merge(left, right, on = 'ID', how = 'outer'), otu_tabs).fillna(0)
 
     ## move sequences to the end of the dataframe
     otu_table.insert(len(otu_table.columns), 'Seq', seq_col)
-    otu_table.replace(np.nan, 0, inplace = True)
 
     ## save the final OTU table
     wb = openpyxl.Workbook(write_only = True)

@@ -7,6 +7,7 @@ from Bio.SeqIO.FastaIO import SimpleFastaParser
 from io import StringIO
 from tqdm import tqdm
 from openpyxl.utils.dataframe import dataframe_to_rows
+from functools import reduce
 
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize
 def denoise(project = None, comp_lvl = None, cores = None, alpha = None, minsize = None):
@@ -165,17 +166,17 @@ def main(project = Path.cwd()):
     esv_table = pd.DataFrame(esv_list, columns = ['ID', 'Seq'])
     seq_col = esv_table.pop('Seq')
 
-    ## add all samples to the ESV table
+    ## extract individual ESV tabs from the clustering output, rename columns correctly, insert the ESV table as first dataframe
     esv_tabs = glob.glob(str(Path(project).joinpath('8_denoising', 'temp', '*_esv_tab.pkl')))
+    esv_tabs = [pickle.load(open(tab_file, 'rb')) for tab_file in esv_tabs]
+    esv_tabs = [tab.rename(columns = {tab.columns[0] : 'ID'}) for tab in esv_tabs]
+    esv_tabs.insert(0, esv_table)
 
-    for tab_file in esv_tabs:
-        tab = pickle.load(open(tab_file, 'rb'))
-        name, data = tab.columns[-1], dict(zip(tab.iloc[:, 0].values, tab.iloc[:, 1].values))
-        esv_table[name] = esv_table['ID'].map(data)
+    ## collapse all individual dataframes into the ESV table, replace nan values with 0
+    esv_table = reduce(lambda left, right: pd.merge(left, right, on = 'ID', how = 'outer'), esv_tabs).fillna(0)
 
-    ## move sequences to the end of the dataframe, replace np.nan values with 0
+    ## move sequences to the end of the dataframe
     esv_table.insert(len(esv_table.columns), 'Seq', seq_col)
-    esv_table.replace(np.nan, 0, inplace = True)
 
     ## save the final OTU table
     wb = openpyxl.Workbook(write_only = True)
