@@ -62,7 +62,7 @@ def create_project(project_name):
     df_5.to_excel(writer, sheet_name = '5_quality_filtering', index = False)
 
     ## write the 6_dereplication_pooling sheet
-    df_6 = pd.DataFrame([[5]],
+    df_6 = pd.DataFrame([[4]],
                         columns = ["min size to pool"])
 
     df_6.to_excel(writer, sheet_name = '6_dereplication_pooling', index = False)
