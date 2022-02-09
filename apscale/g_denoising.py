@@ -174,6 +174,7 @@ def main(project = Path.cwd()):
 
     ## collapse all individual dataframes into the ESV table, replace nan values with 0
     esv_table = reduce(lambda left, right: pd.merge(left, right, on = 'ID', how = 'outer'), esv_tabs).fillna(0)
+    esv_table = pd.concat([esv_table[['ID']], esv_table[esv_table.columns.difference(['ID'])].sort_index(axis = 1)], ignore_index = False, axis = 1)
 
     ## move sequences to the end of the dataframe
     esv_table.insert(len(esv_table.columns), 'Seq', seq_col)

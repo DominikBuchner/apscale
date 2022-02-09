@@ -175,6 +175,7 @@ def main(project = Path.cwd()):
 
     ## collapse all individual dataframes into the OTU table, replace nan values with 0
     otu_table = reduce(lambda left, right: pd.merge(left, right, on = 'ID', how = 'outer'), otu_tabs).fillna(0)
+    otu_table = pd.concat([otu_table[['ID']], otu_table[otu_table.columns.difference(['ID'])].sort_index(axis = 1)], ignore_index = False, axis = 1)
 
     ## move sequences to the end of the dataframe
     otu_table.insert(len(otu_table.columns), 'Seq', seq_col)
