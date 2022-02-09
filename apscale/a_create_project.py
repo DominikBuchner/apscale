@@ -86,5 +86,3 @@ def create_project(project_name):
 
     ## give user output
     print('{}: "{}" created as a new project.'.format(datetime.datetime.now().strftime("%H:%M:%S"), project_name))
-
-create_project('test')
