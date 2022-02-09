@@ -7,7 +7,7 @@ def create_project(project_name):
 
     ## try to create the project folder
     try:
-        os.mkdir(project_name)
+        os.mkdir('apscale_{}'.format(project_name))
     except FileExistsError:
         print('A project with that name already exists. Try another name.')
         return None

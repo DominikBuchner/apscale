@@ -24,8 +24,8 @@ def otu_clustering(project = None, comp_lvl = None, cores = None, pct_id = None)
     print('{}: Starting OTU clustering. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
 
     ## reduce cores to 75% of available ressources to prevent overheating while clustering / denoising:
-    if cores > int(psutil.cpu_count() * 0.5):
-        cores = int(psutil.cpu_count() * 0.5)
+    if cores > int(psutil.cpu_count() * 0.75):
+        cores = int(psutil.cpu_count() * 0.75)
 
     ## run vsearch --cluster_size to cluster OTUs
     ## use --log because for some reason no info is written to stderr with this command
