@@ -166,14 +166,15 @@ def main(project = Path.cwd()):
     esv_table = pd.DataFrame(esv_list, columns = ['ID', 'Seq'])
     seq_col = esv_table.pop('Seq')
 
-    ## extract individual ESV tabs from the clustering output, rename columns correctly, insert the ESV table as first dataframe
+    ## extract individual ESV tabs from the clustering output, rename columns correctly, merge individual tabs
     esv_tabs = glob.glob(str(Path(project).joinpath('8_denoising', 'temp', '*_esv_tab.pkl')))
     esv_tabs = [pickle.load(open(tab_file, 'rb')) for tab_file in esv_tabs]
     esv_tabs = [tab.rename(columns = {tab.columns[0] : 'ID'}) for tab in esv_tabs]
-    esv_tabs.insert(0, esv_table)
+    esv_tabs = [pd.merge(esv_table, tab, on = 'ID', how = 'outer').set_index('ID') for tab in tqdm(esv_tabs, desc = 'Generating ESV table')]
 
     ## collapse all individual dataframes into the ESV table, replace nan values with 0
-    esv_table = reduce(lambda left, right: pd.merge(left, right, on = 'ID', how = 'outer'), esv_tabs).fillna(0)
+    esv_table = pd.concat(esv_tabs, axis = 1)
+    esv_table = esv_table.reset_index(level = 0).fillna(0)
     esv_table = pd.concat([esv_table[['ID']], esv_table[esv_table.columns.difference(['ID'])].sort_index(axis = 1)], ignore_index = False, axis = 1)
 
     ## move sequences to the end of the dataframe

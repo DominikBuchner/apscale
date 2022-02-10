@@ -167,14 +167,15 @@ def main(project = Path.cwd()):
     otu_table = pd.DataFrame(otu_list, columns = ['ID', 'Seq'])
     seq_col = otu_table.pop('Seq')
 
-    ## extract individual OTU tabs from the clustering output, rename columns correctly, insert the OTU table as first dataframe
+    ## extract individual OTU tabs from the clustering output, rename columns correctly, merge all individual tabs with the otu table frame
     otu_tabs = glob.glob(str(Path(project).joinpath('7_otu_clustering', 'temp', '*_otu_tab.pkl')))
     otu_tabs = [pickle.load(open(tab_file, 'rb')) for tab_file in otu_tabs]
     otu_tabs = [tab.rename(columns = {tab.columns[0] : 'ID'}) for tab in otu_tabs]
-    otu_tabs.insert(0, otu_table)
+    otu_tabs = [pd.merge(otu_table, tab, on = 'ID', how = 'outer').set_index('ID') for tab in tqdm(otu_tabs, desc = 'Generating OTU table')]
 
-    ## collapse all individual dataframes into the OTU table, replace nan values with 0
-    otu_table = reduce(lambda left, right: pd.merge(left, right, on = 'ID', how = 'outer'), otu_tabs).fillna(0)
+    ## collapse all individual dataframes into the OTU table, replace nan values with 0, reset index
+    otu_table = pd.concat(otu_tabs, axis = 1)
+    otu_table = otu_table.reset_index(level = 0).fillna(0)
     otu_table = pd.concat([otu_table[['ID']], otu_table[otu_table.columns.difference(['ID'])].sort_index(axis = 1)], ignore_index = False, axis = 1)
 
     ## move sequences to the end of the dataframe
