@@ -69,14 +69,14 @@ def create_project(project_name):
 
 
     ## write the 7_otu_clustering sheet
-    df_7 = pd.DataFrame([[97]],
-                        columns = ['pct id'])
+    df_7 = pd.DataFrame([[97, 'True', 'True']],
+                        columns = ['pct id', 'to excel', 'to parquet'])
 
     df_7.to_excel(writer, sheet_name = '7_otu_clustering', index = False)
 
     ## write the 8_denoising sheet
-    df_8 = pd.DataFrame([[2, 8]],
-                        columns = ['alpha', 'minsize'])
+    df_8 = pd.DataFrame([[2, 8, 'True', 'True']],
+                        columns = ['alpha', 'minsize', 'to excel', 'to parquet'])
 
     df_8.to_excel(writer, sheet_name = '8_denoising', index = False)
 

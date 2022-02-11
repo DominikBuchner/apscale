@@ -128,7 +128,7 @@ def main(project = Path.cwd()):
     cores, comp_lvl = gen_settings['cores to use'].item(), gen_settings['compression level'].item()
 
     settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '8_denoising')
-    alpha, minsize = settings['alpha'].item(), settings['minsize'].item()
+    alpha, minsize, to_excel, to_parquet = settings['alpha'].item(), settings['minsize'].item(), settings['to excel'].item(), settings['to parquet'].item()
 
     ## denoise the dataset
     denoise(project = project, comp_lvl = comp_lvl, cores = cores, alpha = alpha, minsize = minsize)
@@ -180,22 +180,28 @@ def main(project = Path.cwd()):
     ## move sequences to the end of the dataframe
     esv_table.insert(len(esv_table.columns), 'Seq', seq_col)
 
-    ## save the final OTU table
-    wb = openpyxl.Workbook(write_only = True)
-    ws = wb.create_sheet('ESV table')
+    ## save the final OTU table if selected
+    if to_excel:
+        wb = openpyxl.Workbook(write_only = True)
+        ws = wb.create_sheet('ESV table')
 
-    ## save the output line by line for optimized memory usage
-    for row in tqdm(dataframe_to_rows(esv_table, index = False, header = True),
-                                      total = len(esv_table.index),
-                                      desc = '{}: Lines written to ESV table'.format(datetime.datetime.now().strftime("%H:%M:%S")),
-                                      unit = ' lines'):
-        ws.append(row)
+        ## save the output line by line for optimized memory usage
+        for row in tqdm(dataframe_to_rows(esv_table, index = False, header = True),
+                                          total = len(esv_table.index),
+                                          desc = '{}: Lines written to ESV table'.format(datetime.datetime.now().strftime("%H:%M:%S")),
+                                          unit = ' lines'):
+            ws.append(row)
 
-    ## save the output (otu table)
-    print('{}: Saving the ESV table. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
-    wb.save(Path(project).joinpath('8_denoising', '{}_ESV_table.xlsx'.format(Path(project).stem)))
-    wb.close()
-    print('{}: ESV table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('8_denoising', '{}_ESV_table.xlsx'.format(Path(project).stem))))
+        ## save the output (otu table)
+        print('{}: Saving the ESV tableto excel. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+        wb.save(Path(project).joinpath('8_denoising', '{}_ESV_table.xlsx'.format(Path(project).stem)))
+        wb.close()
+        print('{}: ESV table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('8_denoising', '{}_ESV_table.xlsx'.format(Path(project).stem))))
+
+    if to_parquet:
+        print('{}: Saving the ESV table to parquet. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+        otu_table.to_parquet(Path(project).joinpath('8_denoising', '{}_ESV_table.parquet.snappy'.format(Path(project).stem)), index = False)
+        print('{}: ESV table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('8_denoising', '{}_ESV_table.parquet.snappy'.format(Path(project).stem))))
 
     ## remove temporary files
     shutil.rmtree(Path(project).joinpath('8_denoising', 'temp'))

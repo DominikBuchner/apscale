@@ -129,7 +129,7 @@ def main(project = Path.cwd()):
     cores, comp_lvl = gen_settings['cores to use'].item(), gen_settings['compression level'].item()
 
     settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '7_otu_clustering')
-    pct_id = settings['pct id'].item()
+    pct_id, to_excel, to_parquet = settings['pct id'].item(), settings['to excel'].item(), settings['to parquet'].item()
 
     ## run OTU clustering function
     otu_clustering(project = project, comp_lvl = comp_lvl, cores = cores, pct_id = pct_id)
@@ -157,7 +157,7 @@ def main(project = Path.cwd()):
     writer = pd.ExcelWriter(Path(project).joinpath('Project_report.xlsx'), engine = 'openpyxl')
     writer.book = wb
 
-    ## write the output
+    ## write the output to excel
     log_df.to_excel(writer, sheet_name = '7_otu_clustering', index = False)
     wb.save(Path(project).joinpath('Project_report.xlsx'))
     writer.close()
@@ -181,22 +181,29 @@ def main(project = Path.cwd()):
     ## move sequences to the end of the dataframe
     otu_table.insert(len(otu_table.columns), 'Seq', seq_col)
 
-    ## save the final OTU table
-    wb = openpyxl.Workbook(write_only = True)
-    ws = wb.create_sheet('OTU table')
+    ## save the final OTU table if option is selected
+    if to_excel:
+        wb = openpyxl.Workbook(write_only = True)
+        ws = wb.create_sheet('OTU table')
 
-    ## save the output line by line for optimized memory usage
-    for row in tqdm(dataframe_to_rows(otu_table, index = False, header = True),
-                                      total = len(otu_table.index),
-                                      desc = '{}: Lines written to OTU table'.format(datetime.datetime.now().strftime("%H:%M:%S")),
-                                      unit = ' lines'):
-        ws.append(row)
+        ## save the output line by line for optimized memory usage
+        for row in tqdm(dataframe_to_rows(otu_table, index = False, header = True),
+                                          total = len(otu_table.index),
+                                          desc = '{}: Lines written to OTU table'.format(datetime.datetime.now().strftime("%H:%M:%S")),
+                                          unit = ' lines'):
+            ws.append(row)
 
-    ## save the output (otu table)
-    print('{}: Saving the OTU table. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
-    wb.save(Path(project).joinpath('7_otu_clustering', '{}_OTU_table.xlsx'.format(Path(project).stem)))
-    wb.close()
-    print('{}: OTU table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('7_otu_clustering', '{}_OTU_table.xlsx'.format(Path(project).stem))))
+        ## save the output (otu table)
+        print('{}: Saving the OTU table to excel. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+        wb.save(Path(project).joinpath('7_otu_clustering', '{}_OTU_table.xlsx'.format(Path(project).stem)))
+        wb.close()
+        print('{}: OTU table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('7_otu_clustering', '{}_OTU_table.xlsx'.format(Path(project).stem))))
+
+    ## save to parquet if selected, compress with snappy
+    if to_parquet:
+        print('{}: Saving the OTU table to parquet. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+        otu_table.to_parquet(Path(project).joinpath('7_otu_clustering', '{}_OTU_table.parquet.snappy'.format(Path(project).stem)), index = False)
+        print('{}: OTU table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('7_otu_clustering', '{}_OTU_table.parquet.snappy'.format(Path(project).stem))))
 
     ## remove temporary files
     shutil.rmtree(Path(project).joinpath('7_otu_clustering', 'temp'))
