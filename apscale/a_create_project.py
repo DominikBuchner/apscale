@@ -23,7 +23,7 @@ def create_project(project_name):
                   '7_otu_clustering/data',
                   '8_denoising/data']
 
-    subfolders = [Path('apscale_{}'.format(project_name)).joinpath(subfolder) for subfolder in subfolders]
+    subfolders = [Path('{}_apscale'.format(project_name)).joinpath(subfolder) for subfolder in subfolders]
 
     for folder in subfolders:
         os.makedirs(folder)
@@ -31,9 +31,9 @@ def create_project(project_name):
     ## generate and then populate the settings file
     wb = openpyxl.Workbook()
     ws = wb.active
-    wb.save(Path('apscale_{}'.format(project_name)).joinpath('Settings.xlsx'))
-    wb = openpyxl.load_workbook(Path('apscale_{}'.format(project_name)).joinpath('Settings.xlsx'))
-    writer = pd.ExcelWriter(Path('apscale_{}'.format(project_name)).joinpath('Settings.xlsx'), engine = 'openpyxl')
+    wb.save(Path('{}_apscale'.format(project_name)).joinpath('Settings.xlsx'))
+    wb = openpyxl.load_workbook(Path('{}_apscale'.format(project_name)).joinpath('Settings.xlsx'))
+    writer = pd.ExcelWriter(Path('{}_apscale'.format(project_name)).joinpath('Settings.xlsx'), engine = 'openpyxl')
     writer.book = wb
     del wb['Sheet']
 
@@ -81,7 +81,7 @@ def create_project(project_name):
     df_8.to_excel(writer, sheet_name = '8_denoising', index = False)
 
     ## save the Settings file againg
-    wb.save(Path('apscale_{}'.format(project_name)).joinpath('Settings.xlsx'))
+    wb.save(Path('{}_apscale'.format(project_name)).joinpath('Settings.xlsx'))
     writer.close()
 
     ## give user output
