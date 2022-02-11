@@ -200,7 +200,7 @@ def main(project = Path.cwd()):
 
     if to_parquet:
         print('{}: Saving the ESV table to parquet. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
-        otu_table.to_parquet(Path(project).joinpath('8_denoising', '{}_ESV_table.parquet.snappy'.format(Path(project).stem)), index = False)
+        esv_table.to_parquet(Path(project).joinpath('8_denoising', '{}_ESV_table.parquet.snappy'.format(Path(project).stem)), index = False)
         print('{}: ESV table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('8_denoising', '{}_ESV_table.parquet.snappy'.format(Path(project).stem))))
 
     ## remove temporary files
