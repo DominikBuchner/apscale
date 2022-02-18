@@ -21,7 +21,9 @@ def create_project(project_name):
                   '6_dereplication_pooling/data/dereplication',
                   '6_dereplication_pooling/data/pooling',
                   '7_otu_clustering/data',
-                  '8_denoising/data']
+                  '8_denoising/data',
+                  '9_lulu_filtering/otu_clustering/data',
+                  '9_lulu_filtering/denoising/data']
 
     subfolders = [Path('{}_apscale'.format(project_name)).joinpath(subfolder) for subfolder in subfolders]
 
@@ -70,15 +72,21 @@ def create_project(project_name):
 
     ## write the 7_otu_clustering sheet
     df_7 = pd.DataFrame([[97, 'True', 'True']],
-                        columns = ['pct id', 'to excel', 'to parquet'])
+                        columns = ['pct id', 'to excel'])
 
     df_7.to_excel(writer, sheet_name = '7_otu_clustering', index = False)
 
     ## write the 8_denoising sheet
     df_8 = pd.DataFrame([[2, 8, 'True', 'True']],
-                        columns = ['alpha', 'minsize', 'to excel', 'to parquet'])
+                        columns = ['alpha', 'minsize', 'to excel'])
 
     df_8.to_excel(writer, sheet_name = '8_denoising', index = False)
+
+    ## write the 8_denoising sheet
+    df_9 = pd.DataFrame([[84, 95, 1]],
+                        columns = ['minimum similarity', 'minimum relative cooccurence', 'minimum ratio'])
+
+    df_9.to_excel(writer, sheet_name = '9_lulu_filtering', index = False)
 
     ## save the Settings file againg
     wb.save(Path('{}_apscale'.format(project_name)).joinpath('Settings.xlsx'))
@@ -86,3 +94,5 @@ def create_project(project_name):
 
     ## give user output
     print('{}: "{}" created as a new project.'.format(datetime.datetime.now().strftime("%H:%M:%S"), project_name))
+
+create_project('test')

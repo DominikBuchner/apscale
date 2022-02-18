@@ -129,7 +129,7 @@ def main(project = Path.cwd()):
     cores, comp_lvl = gen_settings['cores to use'].item(), gen_settings['compression level'].item()
 
     settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '7_otu_clustering')
-    pct_id, to_excel, to_parquet = settings['pct id'].item(), settings['to excel'].item(), settings['to parquet'].item()
+    pct_id, to_excel = settings['pct id'].item(), settings['to excel'].item()
 
     ## run OTU clustering function
     otu_clustering(project = project, comp_lvl = comp_lvl, cores = cores, pct_id = pct_id)
@@ -200,10 +200,9 @@ def main(project = Path.cwd()):
         print('{}: OTU table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('7_otu_clustering', '{}_OTU_table.xlsx'.format(Path(project).stem))))
 
     ## save to parquet if selected, compress with snappy
-    if to_parquet:
-        print('{}: Saving the OTU table to parquet. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
-        otu_table.to_parquet(Path(project).joinpath('7_otu_clustering', '{}_OTU_table.parquet.snappy'.format(Path(project).stem)), index = False)
-        print('{}: OTU table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('7_otu_clustering', '{}_OTU_table.parquet.snappy'.format(Path(project).stem))))
+    print('{}: Saving the OTU table to parquet. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+    otu_table.to_parquet(Path(project).joinpath('7_otu_clustering', '{}_OTU_table.parquet.snappy'.format(Path(project).stem)), index = False)
+    print('{}: OTU table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('7_otu_clustering', '{}_OTU_table.parquet.snappy'.format(Path(project).stem))))
 
     ## remove temporary files
     shutil.rmtree(Path(project).joinpath('7_otu_clustering', 'temp'))

@@ -128,7 +128,7 @@ def main(project = Path.cwd()):
     cores, comp_lvl = gen_settings['cores to use'].item(), gen_settings['compression level'].item()
 
     settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '8_denoising')
-    alpha, minsize, to_excel, to_parquet = settings['alpha'].item(), settings['minsize'].item(), settings['to excel'].item(), settings['to parquet'].item()
+    alpha, minsize, to_excel = settings['alpha'].item(), settings['minsize'].item(), settings['to excel'].item()
 
     ## denoise the dataset
     denoise(project = project, comp_lvl = comp_lvl, cores = cores, alpha = alpha, minsize = minsize)
@@ -198,10 +198,10 @@ def main(project = Path.cwd()):
         wb.close()
         print('{}: ESV table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('8_denoising', '{}_ESV_table.xlsx'.format(Path(project).stem))))
 
-    if to_parquet:
-        print('{}: Saving the ESV table to parquet. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
-        esv_table.to_parquet(Path(project).joinpath('8_denoising', '{}_ESV_table.parquet.snappy'.format(Path(project).stem)), index = False)
-        print('{}: ESV table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('8_denoising', '{}_ESV_table.parquet.snappy'.format(Path(project).stem))))
+
+    print('{}: Saving the ESV table to parquet. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+    esv_table.to_parquet(Path(project).joinpath('8_denoising', '{}_ESV_table.parquet.snappy'.format(Path(project).stem)), index = False)
+    print('{}: ESV table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('8_denoising', '{}_ESV_table.parquet.snappy'.format(Path(project).stem))))
 
     ## remove temporary files
     shutil.rmtree(Path(project).joinpath('8_denoising', 'temp'))
