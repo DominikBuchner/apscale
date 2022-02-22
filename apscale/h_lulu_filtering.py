@@ -1,6 +1,29 @@
-import os, subprocess, gzip, shutil
+import os, subprocess, gzip, shutil, datetime, contextlib, joblib
 import pandas as pd
+import numpy as np
 from pathlib import Path
+from joblib import Parallel, delayed
+from tqdm import tqdm
+from Bio.SeqIO.FastaIO import SimpleFastaParser
+
+## function to create a progressmeter for the parallel filtering execution
+@contextlib.contextmanager
+def tqdm_joblib(tqdm_object):
+    """Context manager to patch joblib to report into tqdm progress bar given as argument"""
+
+    def tqdm_print_progress(self):
+        if self.n_completed_tasks > tqdm_object.n:
+            n_completed = self.n_completed_tasks - tqdm_object.n
+            tqdm_object.update(n=n_completed)
+
+    original_print_progress = joblib.parallel.Parallel.print_progress
+    joblib.parallel.Parallel.print_progress = tqdm_print_progress
+
+    try:
+        yield tqdm_object
+    finally:
+        joblib.parallel.Parallel.print_progress = original_print_progress
+        tqdm_object.close()
 
 ## function to generate the matchfile
 def generate_matchfile(project = None, file = None, cores = None, comp_lvl = None, type = None, min_sim = None):
@@ -11,11 +34,11 @@ def generate_matchfile(project = None, file = None, cores = None, comp_lvl = Non
     if type == 'otu':
         sample_name_out = 'OTU_matchfile.txt.gz'
         output_path = Path(project).joinpath('9_lulu_filtering', 'otu_clustering', 'data', sample_name_out)
-        log_path =Path(project).joinpath('9_lulu_filtering', 'otu_clustering', 'temp', 'matchfile.log')
+        log_path = Path(project).joinpath('9_lulu_filtering', 'otu_clustering', 'temp', 'matchfile.log')
     elif type == 'esv':
         sample_name_out = 'ESV_matchfile.txt.gz'
         output_path = Path(project).joinpath('9_lulu_filtering', 'denoising', 'data', sample_name_out)
-        log_path =Path(project).joinpath('9_lulu_filtering', 'denoising', 'temp', 'matchfile.log')
+        log_path = Path(project).joinpath('9_lulu_filtering', 'denoising', 'temp', 'matchfile.log')
 
     ## generate the files with vsearch
     with open(output_path.with_suffix(''), 'w') as output:
@@ -38,6 +61,90 @@ def generate_matchfile(project = None, file = None, cores = None, comp_lvl = Non
             shutil.copyfileobj(in_stream, out_stream)
     os.remove(output_path.with_suffix(''))
 
+## function to load the otu / esv table and reorder it accoring to the lulu algorithm
+def load_data_table(project = None, type = None):
+    ## read the table from parquet, set the index to OTU names for easy searching / filtering
+    if type == 'otu':
+        data_table = pd.read_parquet(Path(project).joinpath('7_otu_clustering', '{}_OTU_table.parquet.snappy'.format(Path(project).stem)))
+    elif type == 'esv':
+        data_table = pd.read_parquet(Path(project).joinpath('8_denoising', '{}_ESV_table.parquet.snappy'.format(Path(project).stem)))
+    data_table = data_table.set_index('ID')
+    ## order by occurence, the read count, calculate statistics for calculations later
+    ## store the sequence data to readd it to the otu table in the end
+    seq_dict = dict(zip(data_table.index, data_table.pop('Seq')))
+    data_table['occurence'] = np.count_nonzero(data_table, axis = 1)
+    data_table['read_count'] = data_table.sum(axis = 1, numeric_only = True)
+    data_table = data_table.sort_values(by = ['occurence', 'read_count'], ascending = False)
+    occ_statistics = dict(zip(data_table.index, data_table['occurence']))
+    data_table = data_table.drop(['occurence', 'read_count'], axis = 1)
+
+    return data_table, occ_statistics, seq_dict
+
+def load_matches(project = None, type = None, occ_statistics = None):
+    if type == 'otu':
+        sample_name_out = 'OTU_matchfile.txt.gz'
+        matches = pd.read_csv(Path(project).joinpath('9_lulu_filtering', 'otu_clustering', 'data', sample_name_out), names = ['query', 'match', 'similarity'], sep = '\t')
+    elif type == 'esv':
+        sample_name_out = 'ESV_matchfile.txt.gz'
+        matches = pd.read_csv(Path(project).joinpath('9_lulu_filtering', 'denoising', 'data', sample_name_out), names = ['query', 'match', 'similarity'], sep = '\t')
+    ## generate a dict of all otus in the table and the potential matches as a list
+    matches = {id: matches.loc[matches['query'] == id]['match'].to_list() for id in occ_statistics}
+    return matches
+
+## function to check the potential daughter sequences according to the lulu algorithm
+def check_daughter(pot_daughter = None, hit_frame = None, sub_statistics = None, min_rel_co = None, min_ratio = None):
+    ## extract the name of the potential daughter
+    pot_daughter_name = pot_daughter.index.item()
+    ## extract all potential parents
+    pot_parents = [hit for hit in hit_frame.index if sub_statistics[hit] >= sub_statistics[pot_daughter_name]]
+
+    ## loop through all potential parents and check if they are parent to the daughter
+    for parent in pot_parents:
+        if parent:
+            ## generate a dataframe for the calculations, transpose, only select samples where the daughter has reads
+            comp = pd.concat([hit_frame.loc[[parent]], pot_daughter]).T
+            comp = comp.loc[comp[pot_daughter_name] > 0]
+            ## compute relative co-occurence
+            try:
+                rel_co = len(comp) / np.count_nonzero(comp[parent])
+            except ZeroDivisionError:
+                rel_co = 0
+            ## if relative occurence is sufficient compute abundance ratio
+            if rel_co > min_rel_co:
+                comp['ab_ratio'] = comp[parent] / comp[pot_daughter_name]
+                ## set the potential parent as valid if abundance ratio is sufficient
+                if min(comp['ab_ratio']) > min_ratio:
+                    return pot_daughter_name, parent, rel_co, min(comp['ab_ratio'])
+                    break
+                else:
+                    continue
+            else:
+                continue
+
+## function to filter the corrected OTUs / ESVs from the fasta file
+def filter_fasta(project = None, type = None, seqs_to_keep = None):
+    if type == 'otu':
+        in_stream = Path(project).joinpath('7_otu_clustering', '{}_OTUs.fasta'.format(Path(project).stem))
+        out_stream = Path(project).joinpath('9_lulu_filtering', 'otu_clustering', '{}_OTUs_filtered.fasta'.format(Path(project).stem))
+    elif type == 'esv':
+        in_stream = Path(project).joinpath('8_denoising', '{}_ESVs.fasta'.format(Path(project).stem))
+        out_stream = Path(project).joinpath('9_lulu_filtering', 'denoising', '{}_ESVs_filtered.fasta'.format(Path(project).stem))
+
+    with open(in_stream, 'r') as in_stream:
+        with open(out_stream, 'w') as out_stream:
+            for (header, seq) in SimpleFastaParser(in_stream):
+                if header in seqs_to_keep:
+                    out_stream.write('{}\n{}\n'.format(header, seq))
+
+## function to write the specific log
+def write_log(project = None, results = None):
+    log_df = pd.DataFrame(results, columns = ['ID', 'Error of', 'cooccurence', 'abundance ratio'])
+    log_df['sort'] = log_df['ID'].str.split('_').str[1].astype(float)
+    log_df = log_df.sort_values(by = ['sort'])
+    log_df = log_df.drop(['sort'], axis = 1)
+
+    print(log_df)
+
 def main(project = Path.cwd()):
     """Main function of the script. Default values can be changed via the Settings file.
     If default values are desired no arguments are required. Default working directory
@@ -58,14 +165,64 @@ def main(project = Path.cwd()):
     except FileExistsError:
         pass
 
+    ## user output
+    print('{}: Generating matchfiles for OTUs and ESVs.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
     ## start with the matchfile generation of otus and esvs
     otu_fasta = Path(project).joinpath('7_otu_clustering', '{}_OTUs.fasta'.format(Path(project).stem))
     esv_fasta = Path(project).joinpath('8_denoising', '{}_ESVs.fasta'.format(Path(project).stem))
 
+    ## generate the matchlists for otus and esvs
     for file, type in zip((otu_fasta, esv_fasta), ('otu', 'esv')):
         generate_matchfile(project, file, cores, comp_lvl, type, min_sim)
-    ## generate the matchlist for the otus
 
+    for type in ('otu', 'esv'):
+        print('{}: Loading the {} table.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
+        data_table, occ_statistics, seq_dict = load_data_table(project, type)
+
+        ## load the match list
+        print('{}: Loading the match list table.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+        matches = load_matches(project, type, occ_statistics)
+
+        print('{}: Starting to filter the {}s.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
+        ## run the filtering algorithm parallelized
+        with tqdm_joblib(tqdm(desc = 'Filtering: ', total = len(occ_statistics))) as progress_bar:
+            results = Parallel(n_jobs = cores)(delayed(check_daughter)(data_table.loc[[seq]],
+                                                                      data_table.loc[data_table.index.isin(matches[seq])],
+                                                                      {seq: occ_statistics[seq] for seq in matches[seq] + [seq]},
+                                                                      min_rel_co = min_rel_co / 100, min_ratio = min_ratio) for seq in occ_statistics)
+
+        ## remove none return from parallel execution, check relations between OTUs / ESVs
+        results = [hit for hit in results if hit]
+        print('{}: Found {} erroneous {}s.'.format(datetime.datetime.now().strftime("%H:%M:%S"), len(results), type.upper()))
+        relations = {hit[0]: hit[1] for hit in results}
+        data_table = data_table.T
+
+        print('{}: Correcting the {} table.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
+        ## filter the table in reverse order to merge errors of errors
+        for error in tqdm(reversed(relations.keys()), total = len(relations), desc = 'Progress: '):
+            data_table[relations[error]] = data_table[relations[error]] + data_table[error]
+            data_table = data_table.drop(error, axis = 1)
+
+        ## transpose the data table again, resort OTU column
+        data_table = data_table.T
+        data_table['sort'] = data_table.index.str.split('_').str[1].astype(float)
+        data_table = data_table.sort_values(by = ['sort'])
+        data_table = data_table.drop(['sort'], axis = 1)
+
+        print('{}: Saving the filtered {} table to parquet.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
+        if type == 'otu':
+            outpath = Path(project).joinpath('9_lulu_filtering', 'otu_clustering', '{}_OTU_table_filtered.parquet.snappy'.format(Path(project).stem))
+        elif type == 'esv':
+            outpath = Path(project).joinpath('9_lulu_filtering', 'denoising', '{}_ESV_table_filtered.parquet.snappy'.format(Path(project).stem))
+        data_table.to_parquet(outpath)
+        print('{}: {} table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper(), outpath))
+
+        ## rewriting the fasta file
+        print('{}: Removing erroneous {}s from fasta file.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
+        filter_fasta(project, type, data_table.index)
+
+        ## write the log
+        write_log(project, results)
 
 if __name__ == "__main__":
     main('C:\\Users\\Dominik\\Desktop\\lulu_apscale')
