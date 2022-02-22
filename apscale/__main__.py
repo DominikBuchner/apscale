@@ -1,5 +1,5 @@
 import argparse, sys
-from apscale import a_create_project, b_pe_merging, c_primer_trimming, d_quality_filtering, e_dereplication_pooling, f_otu_clustering, g_denoising
+from apscale import a_create_project, b_pe_merging, c_primer_trimming, d_quality_filtering, e_dereplication_pooling, f_otu_clustering, g_denoising, h_lulu_filtering
 
 ## main function for the command line interface
 def main():
@@ -28,6 +28,7 @@ def main():
     modules.add_argument('--dereplication_pooling', metavar = 'PATH', nargs = '?', const = False,  default = argparse.SUPPRESS, help = 'Run the dereplication_pooling module.')
     modules.add_argument('--otu_clustering', metavar = 'PATH', nargs = '?', const = False,  default = argparse.SUPPRESS, help = 'Run the otu_clustering module.')
     modules.add_argument('--denoising', metavar = 'PATH', nargs = '?', const = False, default = argparse.SUPPRESS, help = 'Run the denoising module.')
+    modules.add_argument('--lulu_filtering', metavar = 'PATH', nargs = '?', const = False, default = argparse.SUPPRESS, help = 'Run the lulu filtering module.')
 
     ## parse command line arguments
     args = parser.parse_args()
@@ -44,6 +45,7 @@ def main():
             e_dereplication_pooling.main()
             f_otu_clustering.main()
             g_denoising.main()
+            h_lulu_filtering.main()
         else:
             b_pe_merging.main(args.run_apscale)
             c_primer_trimming.main(args.run_apscale)
@@ -51,6 +53,7 @@ def main():
             e_dereplication_pooling.main(args.run_apscale)
             f_otu_clustering.main(args.run_apscale)
             g_denoising.main(args.run_apscale)
+            h_lulu_filtering.main(args.run_apscale)
 
     ## check if a module was called, then check if an additional argument was called
     if 'pe_merging' in args:
@@ -93,6 +96,13 @@ def main():
             g_denoising.main()
         else:
             g_denoising.main(args.denoising)
+
+    if 'lulu_filtering' in args:
+        if not args.lulu_filtering:
+            h_lulu_filtering.main()
+        else:
+            h_lulu_filtering.main(args.denoising)
+
 
     ## print help if no argument is provided
     if len(sys.argv) == 1:

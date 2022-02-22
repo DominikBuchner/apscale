@@ -1,10 +1,11 @@
-import os, subprocess, gzip, shutil, datetime, contextlib, joblib
+import os, subprocess, gzip, shutil, datetime, contextlib, joblib, openpyxl
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from Bio.SeqIO.FastaIO import SimpleFastaParser
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 ## function to create a progressmeter for the parallel filtering execution
 @contextlib.contextmanager
@@ -137,13 +138,28 @@ def filter_fasta(project = None, type = None, seqs_to_keep = None):
                     out_stream.write('{}\n{}\n'.format(header, seq))
 
 ## function to write the specific log
-def write_log(project = None, results = None):
+def write_log(project = None, results = None, type = None):
     log_df = pd.DataFrame(results, columns = ['ID', 'Error of', 'cooccurence', 'abundance ratio'])
     log_df['sort'] = log_df['ID'].str.split('_').str[1].astype(float)
     log_df = log_df.sort_values(by = ['sort'])
     log_df = log_df.drop(['sort'], axis = 1)
 
-    print(log_df)
+    ## add log to the project report
+    wb = openpyxl.load_workbook(Path(project).joinpath('Project_report.xlsx'))
+    writer = pd.ExcelWriter(Path(project).joinpath('Project_report.xlsx'), engine = 'openpyxl')
+    writer.book = wb
+
+    ## write the output
+    if type == 'otu':
+        log_df.to_excel(Path(project).joinpath('9_lulu_filtering', 'otu_clustering', 'Logfile_9_lulu_filtering_otu.xlsx'), sheet_name = '9_lulu_filtering_otu', index = False)
+        log_df.to_excel(writer, sheet_name = '9_lulu_filtering_otu', index = False)
+    elif type == 'esv':
+        log_df.to_excel(Path(project).joinpath('9_lulu_filtering', 'denoising', 'Logfile_9_lulu_filtering_esv.xlsx'), sheet_name = '9_lulu_filtering_esv', index = False)
+        log_df.to_excel(writer, sheet_name = '9_lulu_filtering_esv', index = False)
+
+    ## write the output
+    wb.save(Path(project).joinpath('Project_report.xlsx'))
+    writer.close()
 
 def main(project = Path.cwd()):
     """Main function of the script. Default values can be changed via the Settings file.
@@ -156,7 +172,7 @@ def main(project = Path.cwd()):
 
     ## extract the settings for this module
     settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '9_lulu_filtering')
-    min_sim, min_rel_co, min_ratio = settings['minimum similarity'].item(), settings['minimum relative cooccurence'].item(), settings['minimum ratio'].item()
+    min_sim, min_rel_co, min_ratio, to_excel = settings['minimum similarity'].item(), settings['minimum relative cooccurence'].item(), settings['minimum ratio'].item(), settings['to excel'].item()
 
     ## create temporal output folder for the log files
     try:
@@ -209,6 +225,12 @@ def main(project = Path.cwd()):
         data_table = data_table.sort_values(by = ['sort'])
         data_table = data_table.drop(['sort'], axis = 1)
 
+        ## set index to column
+        data_table = data_table.reset_index()
+        data_table['Seq'] = data_table['ID'].map(seq_dict)
+
+
+        ## write table to parquet
         print('{}: Saving the filtered {} table to parquet.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
         if type == 'otu':
             outpath = Path(project).joinpath('9_lulu_filtering', 'otu_clustering', '{}_OTU_table_filtered.parquet.snappy'.format(Path(project).stem))
@@ -217,12 +239,38 @@ def main(project = Path.cwd()):
         data_table.to_parquet(outpath)
         print('{}: {} table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper(), outpath))
 
+        ## write table to excel if option is enabled
+        if to_excel:
+            wb = openpyxl.Workbook(write_only = True)
+            ws = wb.create_sheet('{} table'.format(type.upper()))
+
+            ## save the output line by line for optimized memory usage
+            for row in tqdm(dataframe_to_rows(data_table, index = False, header = True),
+                                              total = len(data_table.index),
+                                              desc = '{}: Lines written to {} table'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()),
+                                              unit = ' lines'):
+                ws.append(row)
+
+            ## save the output (otu table)
+            print('{}: Saving the {} table to excel. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
+            if type == 'otu':
+                wb.save(Path(project).joinpath('9_lulu_filtering', 'otu_clustering', '{}_{}_table_filtered.xlsx'.format(Path(project).stem, type.upper())))
+            elif type == 'esv':
+                wb.save(Path(project).joinpath('9_lulu_filtering', 'denoising', '{}_{}_table_filtered.xlsx'.format(Path(project).stem, type.upper())))
+            wb.close()
+            print('{}: ESV table saved to {}.'.format(datetime.datetime.now().strftime("%H:%M:%S"), Path(project).joinpath('8_denoising', '{}_ESV_table.xlsx'.format(Path(project).stem))))
+
         ## rewriting the fasta file
         print('{}: Removing erroneous {}s from fasta file.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
         filter_fasta(project, type, data_table.index)
 
         ## write the log
-        write_log(project, results)
+        print('{}: Writing log files.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
+        write_log(project, results, type = type)
+
+    ## remove temporary files
+    shutil.rmtree(Path(project).joinpath('9_lulu_filtering', 'otu_clustering', 'temp'))
+    shutil.rmtree(Path(project).joinpath('9_lulu_filtering', 'denoising', 'temp'))
 
 if __name__ == "__main__":
-    main('C:\\Users\\Dominik\\Desktop\\lulu_apscale')
+    main()
