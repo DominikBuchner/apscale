@@ -55,7 +55,8 @@ def generate_matchfile(project = None, file = None, cores = None, comp_lvl = Non
                             '--query_cov', str(0.9),
                             '--quiet',
                             '--log', log_path,
-                            '--threads', str(cores)], stdout = output)
+                            '--threads', str(cores),
+                            '--maxhits', str(10)], stdout = output)
 
     ## compress the output
     with open(output_path.with_suffix(''), 'rb') as in_stream, gzip.open(output_path, 'wb', comp_lvl) as out_stream:
