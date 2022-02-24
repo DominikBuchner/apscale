@@ -101,7 +101,7 @@ def main():
         if not args.lulu_filtering:
             h_lulu_filtering.main()
         else:
-            h_lulu_filtering.main(args.denoising)
+            h_lulu_filtering.main(args.lulu_filtering)
 
 
     ## print help if no argument is provided

@@ -6,6 +6,7 @@ from joblib import Parallel, delayed
 from tqdm import tqdm
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 from openpyxl.utils.dataframe import dataframe_to_rows
+from io import StringIO
 
 ## function to create a progressmeter for the parallel filtering execution
 @contextlib.contextmanager
@@ -58,9 +59,9 @@ def generate_matchfile(project = None, file = None, cores = None, comp_lvl = Non
                             '--threads', str(cores),
                             '--maxhits', str(10)], stdout = output)
 
-    ## compress the output
+    ## convert to dataframe, save to parquet
     with open(output_path.with_suffix(''), 'rb') as in_stream, gzip.open(output_path, 'wb', comp_lvl) as out_stream:
-            shutil.copyfileobj(in_stream, out_stream)
+        shutil.copyfileobj(in_stream, out_stream)
     os.remove(output_path.with_suffix(''))
 
 ## function to load the otu / esv table and reorder it accoring to the lulu algorithm
@@ -85,12 +86,20 @@ def load_data_table(project = None, type = None):
 def load_matches(project = None, type = None, occ_statistics = None):
     if type == 'otu':
         sample_name_out = 'OTU_matchfile.txt.gz'
-        matches = pd.read_csv(Path(project).joinpath('9_lulu_filtering', 'otu_clustering', 'data', sample_name_out), names = ['query', 'match', 'similarity'], sep = '\t')
+        matches = pd.read_csv(Path(project).joinpath('9_lulu_filtering', 'otu_clustering', 'data', sample_name_out), sep = '\t', names = ['query', 'match', 'similarity'])
     elif type == 'esv':
         sample_name_out = 'ESV_matchfile.txt.gz'
-        matches = pd.read_csv(Path(project).joinpath('9_lulu_filtering', 'denoising', 'data', sample_name_out), names = ['query', 'match', 'similarity'], sep = '\t')
+        matches = pd.read_csv(Path(project).joinpath('9_lulu_filtering', 'denoising', 'data', sample_name_out), sep = '\t', names = ['query', 'match', 'similarity'])
     ## generate a dict of all otus in the table and the potential matches as a list
-    matches = {id: matches.loc[matches['query'] == id]['match'].to_list() for id in occ_statistics}
+    matches = matches.set_index('query')
+
+    ##  sort the matches in the order of occurence (or read table)
+    sorter = [key for key in occ_statistics.keys() if key in matches.index]
+    matches = matches.loc[sorter]
+
+    ## generate the dict with potential hits for every id
+    matches = matches.groupby('query', sort = False)['match'].apply(list).to_dict()
+
     return matches
 
 ## function to check the potential daughter sequences according to the lulu algorithm
@@ -123,6 +132,45 @@ def check_daughter(pot_daughter = None, hit_frame = None, sub_statistics = None,
             else:
                 continue
 
+## accepts the relations returned by the check daughter function in the form of a dict with
+## daughter: parent mappings and return a dict with parent: daughter mappings, where parents
+## of parents are already aggregated so that the curation of the OTU table can be done with
+## a single groupby instead of iterative sums
+def aggregate_relations(relations):
+    ## collect all daughters of a given parent in this dict
+    all_parents = {}
+
+    ## aggregation logic
+    for daughter in reversed(relations.keys()):
+        parent = relations[daughter]
+
+        ## if the daughter is already a parent
+        if daughter in all_parents:
+            ## if the parent of that daughter is already a parent, append this parent with the daughter and all daughters of the daughter and
+            if parent in all_parents:
+                all_parents[parent] += [daughter] + all_parents[daughter]
+                ## remove the daughter from the parent, since it listed under a new parent
+                del all_parents[daughter]
+            else:
+                ## if the parent of this daughter is not a parent make it one and append the daughter and all daughters of that daughter
+                all_parents[parent] = [daughter] + all_parents[daughter]
+        elif daughter not in all_parents:
+            ## if the parent is already in the parents simply append the new daughter
+            if parent in all_parents:
+                all_parents[parent] += [daughter]
+            ## if not create a new parent: daughter mapping
+            elif parent not in all_parents:
+                all_parents[parent] = [daughter]
+
+    ## generate the output as a mapping of all daughter: parent pairs to map to the original dataframe
+    output = {}
+
+    for parent in all_parents:
+        for daughter in all_parents[parent]:
+            output[daughter] = parent
+
+    return output
+
 ## function to filter the corrected OTUs / ESVs from the fasta file
 def filter_fasta(project = None, type = None, seqs_to_keep = None):
     if type == 'otu':
@@ -144,6 +192,9 @@ def write_log(project = None, results = None, type = None):
     log_df['sort'] = log_df['ID'].str.split('_').str[1].astype(float)
     log_df = log_df.sort_values(by = ['sort'])
     log_df = log_df.drop(['sort'], axis = 1)
+    f = subprocess.run(['vsearch', '--version'], capture_output = True)
+    version = f.stderr.decode('ascii', errors = 'ignore').split(',')[0]
+    log_df['program version'] = version
 
     ## add log to the project report
     wb = openpyxl.load_workbook(Path(project).joinpath('Project_report.xlsx'))
@@ -202,26 +253,28 @@ def main(project = Path.cwd()):
 
         print('{}: Starting to filter the {}s.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
         ## run the filtering algorithm parallelized
-        with tqdm_joblib(tqdm(desc = 'Filtering: ', total = len(occ_statistics))) as progress_bar:
+        with tqdm_joblib(tqdm(desc = 'Filtering: ', total = len(matches))) as progress_bar:
             results = Parallel(n_jobs = cores)(delayed(check_daughter)(data_table.loc[[seq]],
                                                                       data_table.loc[data_table.index.isin(matches[seq])],
                                                                       {seq: occ_statistics[seq] for seq in matches[seq] + [seq]},
-                                                                      min_rel_co = min_rel_co / 100, min_ratio = min_ratio) for seq in occ_statistics)
+                                                                      min_rel_co = min_rel_co / 100, min_ratio = min_ratio) for seq in matches)
 
         ## remove none return from parallel execution, check relations between OTUs / ESVs
         results = [hit for hit in results if hit]
         print('{}: Found {} erroneous {}s.'.format(datetime.datetime.now().strftime("%H:%M:%S"), len(results), type.upper()))
         relations = {hit[0]: hit[1] for hit in results}
-        data_table = data_table.T
+
+        ## find parents of parents in the relations, aggregate the result to individual
+        ## dauther: parent mappings
+        relations = aggregate_relations(relations)
 
         print('{}: Correcting the {} table.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
-        ## filter the table in reverse order to merge errors of errors
-        for error in tqdm(reversed(relations.keys()), total = len(relations), desc = 'Progress: '):
-            data_table[relations[error]] = data_table[relations[error]] + data_table[error]
-            data_table = data_table.drop(error, axis = 1)
+        new_idx = [relations[otu] if otu in relations else otu for otu in data_table.index]
+        data_table.index = new_idx
+        data_table.index.name = 'ID'
+        data_table = data_table.groupby(data_table.index, sort = False).sum()
 
-        ## transpose the data table again, resort OTU column
-        data_table = data_table.T
+        ## resort OTU column
         data_table['sort'] = data_table.index.str.split('_').str[1].astype(float)
         data_table = data_table.sort_values(by = ['sort'])
         data_table = data_table.drop(['sort'], axis = 1)
@@ -229,7 +282,6 @@ def main(project = Path.cwd()):
         ## set index to column
         data_table = data_table.reset_index()
         data_table['Seq'] = data_table['ID'].map(seq_dict)
-
 
         ## write table to parquet
         print('{}: Saving the filtered {} table to parquet.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
@@ -263,7 +315,7 @@ def main(project = Path.cwd()):
 
         ## rewriting the fasta file
         print('{}: Removing erroneous {}s from fasta file.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
-        filter_fasta(project, type, data_table.index)
+        filter_fasta(project, type, data_table['ID'].to_list())
 
         ## write the log
         print('{}: Writing log files.'.format(datetime.datetime.now().strftime("%H:%M:%S"), type.upper()))
