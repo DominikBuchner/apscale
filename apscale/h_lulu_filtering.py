@@ -184,7 +184,7 @@ def filter_fasta(project = None, type = None, seqs_to_keep = None):
         with open(out_stream, 'w') as out_stream:
             for (header, seq) in SimpleFastaParser(in_stream):
                 if header in seqs_to_keep:
-                    out_stream.write('{}\n{}\n'.format(header, seq))
+                    out_stream.write('>{}\n{}\n'.format(header, seq))
 
 ## function to write the specific log
 def write_log(project = None, results = None, type = None):
