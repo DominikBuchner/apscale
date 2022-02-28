@@ -141,7 +141,7 @@ def aggregate_relations(relations):
     all_parents = {}
 
     ## aggregation logic
-    for daughter in reversed(relations.keys()):
+    for daughter in reversed(list(relations.keys())):
         parent = relations[daughter]
 
         ## if the daughter is already a parent
