@@ -4,15 +4,16 @@ Advanced Pipeline for Simple yet Comprehensive AnaLysEs of DNA metabarcoding dat
 ## Introduction
 Apscale is a metabarcoding pipeline that handles the most common tasks in metabarcoding
 pipelines like paired-end merging, primer trimming, quality filtering, otu clustering and
-denoising. It uses a simple command line interface and is configured via a single configuration file.
+denoising as well as an otu filtering step. It uses a simple command line interface and is configured via a single configuration file.
 It automatically uses the available ressources on the machine it runs on while still providing the option
 to use less if desired. All modules can be run on their own or as a comprehensive workflow.
 
 A graphical user interface version for apscale is available [here](https://github.com/TillMacher/apscale_gui).
 
 Programs used:
-* vsearch (PE merging, quality filtering, otu clustering, denoising)
-* cutadapt (primer trimming)
+* vsearch (PE merging, quality filtering, otu clustering, denoising) (https://github.com/torognes/vsearch)
+* cutadapt (primer trimming) (https://github.com/marcelm/cutadapt)
+* lulu (implemented in python for apscale) (https://github.com/tobiasgf/lulu)
 
 Input:
 * demultiplexed gzipped reads
@@ -104,8 +105,14 @@ C:\USERS\DOMINIK\DESKTOP\EXAMPLE_PROJECT
 │       └───pooling
 ├───7_otu_clustering
 │   └───data
-└───8_denoising
-    └───data
+├───8_denoising
+│   └───data
+└───9_lulu_filtering
+    ├───denoising
+    │   └───data
+    └───otu_filtering
+        └───data
+
 </pre>
 
 A new project can be initialized with the command:
