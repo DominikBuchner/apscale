@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="apscale",
-    version="1.5.4",
+    version="1.5.5",
     author="Dominik Buchner",
     author_email="dominik.buchner524@googlemail.com",
     description="Advanced Pipeline for Simple yet Comprehensive AnaLysEs of DNA metabarcoding data",
@@ -24,7 +24,7 @@ setuptools.setup(
                         'tqdm >= 4.56.0',
                         'fastparquet >= 0.8.0',
                         'pyarrow >= 7.0.0'],
-    include_package_data = False,
+    include_package_data = True,
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
