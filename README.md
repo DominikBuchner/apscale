@@ -162,3 +162,4 @@ BOLDigger (https://github.com/DominikBuchner/BOLDigger) can be used directly wit
 
 ### TODO
 * add a failsafe when a non-valid primer name is in the settings file / when the settings file is not correctly set up
+* add new explanation on how to set up vsearch to the system variables
