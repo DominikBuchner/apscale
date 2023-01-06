@@ -1,104 +1,215 @@
-import subprocess, gzip, glob, pickle, datetime, psutil, os, shutil
+import subprocess, gzip, glob, pickle, datetime, os, shutil, re
 import pandas as pd
 from pathlib import Path
 from demultiplexer import file_pairs
 from joblib import Parallel, delayed
 
 ## file pair: matching forward and reverse reads, project: folder to write to
-def pe_merge(file_pair, project = None, comp_lvl = None, maxdiffpct = None, maxdiffs = None, minovlen = None):
+def pe_merge(
+    file_pair,
+    project=None,
+    comp_lvl=None,
+    maxdiffpct=None,
+    maxdiffs=None,
+    minovlen=None,
+):
     """Function to merge to gzipped fastq.gz files via vsearch. Output will be
     a gzipped file containing the merged reads."""
 
     ## extract the filename from the sample path / name and convert to output name
     ## create an output path to write to
-    sample_name_out = '{}_PE.fastq.gz'.format('_'.join(Path(file_pair[0]).name.split('_')[:-1]))
-    output_path = Path(project).joinpath('3_PE_merging', 'data', sample_name_out)
-    log_path = Path(project).joinpath('3_PE_merging', 'temp', '{}_log.txt'.format(sample_name_out))
+    sample_name_out = "{}_PE.fastq.gz".format(
+        "_".join(Path(file_pair[0]).name.split("_")[:-1])
+    )
+    output_path = Path(project).joinpath("3_PE_merging", "data", sample_name_out)
+    log_path = Path(project).joinpath(
+        "3_PE_merging", "temp", "{}_log.txt".format(sample_name_out)
+    )
 
     ## write stdout to uncompressed output at runtime, write stderr to a log file
-    with open(output_path.with_suffix(''), 'w') as output, open(log_path, 'w') as log:
+    with open(output_path.with_suffix(""), "w") as output, open(log_path, "w") as log:
         ## run vsearch --fastq_mergepairs to merge the file pair
-        f = subprocess.run(['vsearch',
-                            '--fastq_mergepairs', Path(file_pair[0]),
-                            '--reverse', Path(file_pair[1]),
-                            '--fastqout', '-', '--quiet',
-                            '--fastq_maxdiffpct', str(maxdiffpct),
-                            '--fastq_maxdiffs', str(maxdiffs),
-                            '--fastq_minovlen', str(minovlen),
-                            '--fastq_allowmergestagger',
-                            '--threads', str(1)], stdout = output, stderr = log)
+        f = subprocess.run(
+            [
+                "vsearch",
+                "--fastq_mergepairs",
+                Path(file_pair[0]),
+                "--reverse",
+                Path(file_pair[1]),
+                "--fastqout",
+                "-",
+                "--quiet",
+                "--fastq_maxdiffpct",
+                str(maxdiffpct),
+                "--fastq_maxdiffs",
+                str(maxdiffs),
+                "--fastq_minovlen",
+                str(minovlen),
+                "--fastq_allowmergestagger",
+                "--threads",
+                str(1),
+            ],
+            stdout=output,
+            stderr=log,
+        )
 
     ## compress the output, remove uncompressed output
-    with open(output_path.with_suffix(''), 'rb') as in_stream, gzip.open(output_path, 'wb', comp_lvl) as out_stream:
-            shutil.copyfileobj(in_stream, out_stream)
-    os.remove(output_path.with_suffix(''))
+    with open(output_path.with_suffix(""), "rb") as in_stream, gzip.open(
+        output_path, "wb", comp_lvl
+    ) as out_stream:
+        shutil.copyfileobj(in_stream, out_stream)
+    os.remove(output_path.with_suffix(""))
 
     ## read run info from log file
-    with open(Path(project).joinpath('3_PE_merging', 'temp', '{}_log.txt'.format(sample_name_out)), 'rt') as log_file:
+    with open(
+        Path(project).joinpath(
+            "3_PE_merging", "temp", "{}_log.txt".format(sample_name_out)
+        ),
+        "rt",
+    ) as log_file:
         content = log_file.read()
-        reads, merged = int(content.split('\n')[0][:10]), int(content.split('\n')[1][:10])
 
-    finished = '{}'.format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
+        reads, merged = (
+            re.findall("(\d+)  Pairs", content)[0],
+            re.findall("(\d+)  Merged", content)[0],
+        )
+
+    finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
     ## Give user output, if 0 reads are the output handle Zero division exception
     try:
-        print('{}: {}: {} of {} reads merged ({:.2f}%)'.format(datetime.datetime.now().strftime("%H:%M:%S"), sample_name_out, merged, reads, merged / reads * 100))
+        print(
+            "{}: {}: {} of {} reads merged ({:.2f}%)".format(
+                datetime.datetime.now().strftime("%H:%M:%S"),
+                sample_name_out,
+                merged,
+                reads,
+                int(merged) / int(reads) * 100,
+            )
+        )
     except ZeroDivisionError:
-        print('{}: {}: {} of {} reads merged ({:.2f}%)'.format(datetime.datetime.now().strftime("%H:%M:%S"),sample_name_out, 0, reads, 0))
+        print(
+            "{}: {}: {} of {} reads merged ({:.2f}%)".format(
+                datetime.datetime.now().strftime("%H:%M:%S"),
+                sample_name_out,
+                0,
+                reads,
+                0,
+            )
+        )
 
     ## temporarily pickle output for the log file, get vsearch version
-    f = subprocess.run(['vsearch', '--version'], capture_output = True)
-    version = f.stderr.decode('ascii', errors = 'ignore').split(',')[0]
-    with open(Path(project).joinpath('3_PE_merging', 'temp', '{}.pkl'.format(sample_name_out)), 'wb') as log:
+    f = subprocess.run(["vsearch", "--version"], capture_output=True)
+    version = f.stderr.decode("ascii", errors="ignore")
+    version = re.findall("vsearch ([\w\.]*)", version)[0]
+
+    with open(
+        Path(project).joinpath(
+            "3_PE_merging", "temp", "{}.pkl".format(sample_name_out)
+        ),
+        "wb",
+    ) as log:
         pickle.dump([sample_name_out, finished, version, reads, merged], log)
 
-def main(project = Path.cwd()):
+
+def main(project=Path.cwd()):
     """Main function of the script. Default values can be changed via the Settings file.
     If default values are desired no arguments are required. Default working directory
     is the current working directory."""
 
     ## collect variables from the settings file
-    gen_settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '0_general_settings')
-    cores, comp_lvl = gen_settings['cores to use'].item(), gen_settings['compression level'].item()
+    gen_settings = pd.read_excel(
+        Path(project).joinpath("Settings.xlsx"), sheet_name="0_general_settings"
+    )
+    cores, comp_lvl = (
+        gen_settings["cores to use"].item(),
+        gen_settings["compression level"].item(),
+    )
 
-    settings = pd.read_excel(Path(project).joinpath('Settings.xlsx'), sheet_name = '3_PE_merging')
-    maxdiffpct, maxdiffs, minovlen = settings['maxdiffpct'].item(), settings['maxdiffs'].item(), settings['minovlen'].item()
+    settings = pd.read_excel(
+        Path(project).joinpath("Settings.xlsx"), sheet_name="3_PE_merging"
+    )
+    maxdiffpct, maxdiffs, minovlen = (
+        settings["maxdiffpct"].item(),
+        settings["maxdiffs"].item(),
+        settings["minovlen"].item(),
+    )
 
     ## collect all files to merge, find matching file pairs
-    input = glob.glob(str(Path(project).joinpath('2_demultiplexing', 'data', '*.fastq.gz')))
+    input = glob.glob(
+        str(Path(project).joinpath("2_demultiplexing", "data", "*.fastq.gz"))
+    )
 
-    print('{}: Finding all file pairs in your input. This may take a while.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+    print(
+        "{}: Finding all file pairs in your input. This may take a while.".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
     pairs = file_pairs.main(input)
-    print('{}: Found {} matching file pairs in {} input files.'.format(datetime.datetime.now().strftime("%H:%M:%S"), len(pairs), len(input)))
-    print('{}: Starting to merge forward and reverse reads.'.format(datetime.datetime.now().strftime("%H:%M:%S")))
+    print(
+        "{}: Found {} matching file pairs in {} input files.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"), len(pairs), len(input)
+        )
+    )
+    print(
+        "{}: Starting to merge forward and reverse reads.".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
 
     ## create folder for temporal output files
     try:
-        os.mkdir(Path(project).joinpath('3_PE_merging', 'temp'))
+        os.mkdir(Path(project).joinpath("3_PE_merging", "temp"))
     except FileExistsError:
         pass
 
     ## parallelize the PE merging, find out how many cores to use
-    Parallel(n_jobs = cores)(delayed(pe_merge)(pair, project = project, comp_lvl = comp_lvl, maxdiffpct = maxdiffpct, maxdiffs = maxdiffs, minovlen = minovlen) for pair in pairs)
+    Parallel(n_jobs=cores)(
+        delayed(pe_merge)(
+            pair,
+            project=project,
+            comp_lvl=comp_lvl,
+            maxdiffpct=maxdiffpct,
+            maxdiffs=maxdiffs,
+            minovlen=minovlen,
+        )
+        for pair in pairs
+    )
 
     ## write the log file from pkl log, remove logs after
-    summary_logs = glob.glob(str(Path(project).joinpath('3_PE_merging', 'temp', '*.pkl')))
-    summary = [pickle.load(open(line, 'rb')) for line in summary_logs]
+    summary_logs = glob.glob(
+        str(Path(project).joinpath("3_PE_merging", "temp", "*.pkl"))
+    )
+    summary = [pickle.load(open(line, "rb")) for line in summary_logs]
 
     ## generate the output dataframe for PE merging
-    log_df = pd.DataFrame(summary, columns = ['File','finished at', 'program version', 'processed reads', 'merged reads'])
-    log_df = log_df.sort_values(by = 'File')
-    log_df.to_excel(Path(project).joinpath('3_PE_merging', 'Logfile_3_PE_merging.xlsx'),
-                    index = False,
-                    sheet_name = '3_PE_merging')
+    log_df = pd.DataFrame(
+        summary,
+        columns=[
+            "File",
+            "finished at",
+            "program version",
+            "processed reads",
+            "merged reads",
+        ],
+    )
+    log_df = log_df.sort_values(by="File")
+    log_df.to_excel(
+        Path(project).joinpath("3_PE_merging", "Logfile_3_PE_merging.xlsx"),
+        index=False,
+        sheet_name="3_PE_merging",
+    )
 
     ## create the general logfile
-    log_df.to_excel(Path(project).joinpath('Project_report.xlsx'),
-                    index = False,
-                    sheet_name = '3_PE merging')
+    log_df.to_excel(
+        Path(project).joinpath("Project_report.xlsx"),
+        index=False,
+        sheet_name="3_PE merging",
+    )
 
     ## remove temporally saved logs from single files
-    shutil.rmtree(Path(project).joinpath('3_PE_merging', 'temp'))
+    shutil.rmtree(Path(project).joinpath("3_PE_merging", "temp"))
+
 
 if __name__ == "__main__":
     main()

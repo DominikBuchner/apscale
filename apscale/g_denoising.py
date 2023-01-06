@@ -1,4 +1,4 @@
-import subprocess, datetime, gzip, os, pickle, glob, openpyxl, shutil, psutil
+import subprocess, datetime, gzip, os, pickle, glob, openpyxl, shutil, psutil, re, sys
 import pandas as pd
 import numpy as np
 from joblib import Parallel, delayed
@@ -7,7 +7,6 @@ from Bio.SeqIO.FastaIO import SimpleFastaParser
 from io import StringIO
 from tqdm import tqdm
 from openpyxl.utils.dataframe import dataframe_to_rows
-from functools import reduce
 
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize
 def denoise(project=None, comp_lvl=None, cores=None, alpha=None, minsize=None):
@@ -25,10 +24,6 @@ def denoise(project=None, comp_lvl=None, cores=None, alpha=None, minsize=None):
             datetime.datetime.now().strftime("%H:%M:%S")
         )
     )
-
-    ## reduce cores to 75% of available ressources to prevent overheating while clustering / denoising:
-    if cores > int(psutil.cpu_count() * 0.75):
-        cores = int(psutil.cpu_count() * 0.75)
 
     ## run vsearch --cluster_unoise to cluster OTUs
     ## use --log because for some reason no info is written to stderr with this command
@@ -75,10 +70,11 @@ def denoise(project=None, comp_lvl=None, cores=None, alpha=None, minsize=None):
     with open(
         Path(project).joinpath("8_denoising", "temp", "denoising_log.txt")
     ) as log_file:
-        content = log_file.read().split("\n")
-        seqs, esvs = content[3].split(" ")[3], content[17].split(" ")[1]
-        version = content[0].split(",")[0]
-        finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
+        content = log_file.read()
+        seqs, esvs = (
+            re.findall("(\d+) seqs, min ", content)[0],
+            re.findall("Clusters: (\d+) Size min", content)[0],
+        )
 
     print(
         "{}: Denoised unique {} sequences into {} ESVs.".format(
@@ -186,9 +182,9 @@ def remapping_esv(file, project=None):
             "8_denoising", "temp", "{}_mapping_log.txt".format(sample_name_out)
         )
     ) as log_file:
-        content = log_file.read().split("\n")
-        esvs, exact_matches = content[3].split(" ")[3], len(esv_tab)
-        version = content[0].split(",")[0]
+        content = log_file.read()
+        exact_matches = re.findall("Matching query sequences: (\d+)", content)[0]
+        version = re.findall("vsearch ([\w\.]*)", content)[0]
         finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
     ## give user output
@@ -308,16 +304,13 @@ def main(project=Path.cwd()):
     )
 
     ## add log to the project report
-    wb = openpyxl.load_workbook(Path(project).joinpath("Project_report.xlsx"))
-    writer = pd.ExcelWriter(
-        Path(project).joinpath("Project_report.xlsx"), engine="openpyxl"
-    )
-    writer.book = wb
-
-    ## write the output
-    log_df.to_excel(writer, sheet_name="8_denoising", index=False)
-    wb.save(Path(project).joinpath("Project_report.xlsx"))
-    writer.close()
+    with pd.ExcelWriter(
+        Path(project).joinpath("Project_report.xlsx"),
+        mode="a",
+        if_sheet_exists="replace",
+        engine="openpyxl",
+    ) as writer:
+        log_df.to_excel(writer, sheet_name="8_denoising", index=False)
 
     ## generate OTU table, first extract all OTUs and sequences from fasta file
     esv_list = list(

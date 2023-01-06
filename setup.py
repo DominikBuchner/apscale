@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="apscale",
-    version="1.5.6",
+    version="1.6.0",
     author="Dominik Buchner",
     author_email="dominik.buchner524@googlemail.com",
     description="Advanced Pipeline for Simple yet Comprehensive AnaLysEs of DNA metabarcoding data",
@@ -15,9 +15,9 @@ setuptools.setup(
     packages=setuptools.find_packages(),
     license="MIT",
     install_requires=[
-        "openpyxl >= 3.0.6",
+        "openpyxl >= 3.0.10",
         "psutil >= 5.8.0",
-        "pandas >= 1.2.1",
+        "pandas >= 1.5.0",
         "demultiplexer >= 1.1.0",
         "joblib >= 1.0.0",
         "biopython >= 1.78",

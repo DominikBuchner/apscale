@@ -1,14 +1,11 @@
-import subprocess, gzip, datetime, os, subprocess, pickle, glob, openpyxl, shutil, psutil
+import subprocess, gzip, datetime, os, subprocess, pickle, glob, openpyxl, shutil, re
 import pandas as pd
-import numpy as np
-from Bio import SeqIO
 from joblib import Parallel, delayed
 from pathlib import Path
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 from io import StringIO
 from tqdm import tqdm
 from openpyxl.utils.dataframe import dataframe_to_rows
-from functools import reduce
 
 ## clustering function to cluster all sequences in input fasta with given pct_id
 def otu_clustering(project=None, comp_lvl=None, cores=None, pct_id=None):
@@ -26,10 +23,6 @@ def otu_clustering(project=None, comp_lvl=None, cores=None, pct_id=None):
             datetime.datetime.now().strftime("%H:%M:%S")
         )
     )
-
-    ## reduce cores to 75% of available ressources to prevent overheating while clustering / denoising:
-    if cores > int(psutil.cpu_count() * 0.75):
-        cores = int(psutil.cpu_count() * 0.75)
 
     ## run vsearch --cluster_size to cluster OTUs
     ## use --log because for some reason no info is written to stderr with this command
@@ -77,10 +70,11 @@ def otu_clustering(project=None, comp_lvl=None, cores=None, pct_id=None):
     with open(
         Path(project).joinpath("7_otu_clustering", "temp", "clustering_log.txt")
     ) as log_file:
-        content = log_file.read().split("\n")
-        seqs, clusters = content[3].split(" ")[3], content[16].split(" ")[1]
-        version = content[0].split(",")[0]
-        finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
+        content = log_file.read()
+        seqs, clusters = (
+            re.findall("(\d+) seqs, ", content)[0],
+            re.findall("Clusters: (\d+)", content)[0],
+        )
 
     print(
         "{}: Clustered unique {} sequences into {} OTUs.".format(
@@ -111,7 +105,7 @@ def otu_clustering(project=None, comp_lvl=None, cores=None, pct_id=None):
         ]
     )
 
-    ## collect processed and passed reads from the output fasta, since it is not reported in the log
+    ## collect processed and passed sequences from the output fasta, since it is not reported in the log
     f = list(
         SimpleFastaParser(
             open(
@@ -121,6 +115,7 @@ def otu_clustering(project=None, comp_lvl=None, cores=None, pct_id=None):
             )
         )
     )
+
     print(
         "{}: {} chimeras removed from {} OTU sequences.".format(
             datetime.datetime.now().strftime("%H:%M:%S"),
@@ -128,6 +123,7 @@ def otu_clustering(project=None, comp_lvl=None, cores=None, pct_id=None):
             clusters,
         )
     )
+
     print(
         "{}: OTUs saved to {}.".format(
             datetime.datetime.now().strftime("%H:%M:%S"),
@@ -192,9 +188,12 @@ def remapping(file, project=None, pct_id=None):
             "7_otu_clustering", "temp", "{}_mapping_log.txt".format(sample_name_out)
         )
     ) as log_file:
-        content = log_file.read().split("\n")
-        version = content[0].split(",")[0]
-        seqs, mapped = content[5].split(" ")[6], content[5].split(" ")[4]
+        content = log_file.read()
+        mapped, seqs = (
+            re.findall("Matching unique query sequences: (\d+)", content)[0],
+            re.findall("Matching unique query sequences: \d+ of (\d+)", content)[0],
+        )
+        version = re.findall("vsearch ([\w\.]*)", content)[0]
         finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
     ## give user output
@@ -296,16 +295,13 @@ def main(project=Path.cwd()):
     )
 
     ## add log to the project report
-    wb = openpyxl.load_workbook(Path(project).joinpath("Project_report.xlsx"))
-    writer = pd.ExcelWriter(
-        Path(project).joinpath("Project_report.xlsx"), engine="openpyxl"
-    )
-    writer.book = wb
-
-    ## write the output to excel
-    log_df.to_excel(writer, sheet_name="7_otu_clustering", index=False)
-    wb.save(Path(project).joinpath("Project_report.xlsx"))
-    writer.close()
+    with pd.ExcelWriter(
+        Path(project).joinpath("Project_report.xlsx"),
+        mode="a",
+        if_sheet_exists="replace",
+        engine="openpyxl",
+    ) as writer:
+        log_df.to_excel(writer, sheet_name="7_otu_clustering", index=False)
 
     ## generate OTU table, first extract all OTUs and sequences from fasta file
     otu_list = list(
@@ -383,7 +379,7 @@ def main(project=Path.cwd()):
             )
         )
 
-    ## save to parquet if selected, compress with snappy
+    ## save to parquet compress with snappy
     print(
         "{}: Saving the OTU table to parquet. This may take a while.".format(
             datetime.datetime.now().strftime("%H:%M:%S")
