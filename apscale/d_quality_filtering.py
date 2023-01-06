@@ -1,4 +1,4 @@
-import subprocess, gzip, datetime, pickle, glob, os, openpyxl, shutil, re
+import subprocess, gzip, datetime, pickle, glob, os, shutil, re, sys
 import pandas as pd
 from pathlib import Path
 from joblib import Parallel, delayed
@@ -127,7 +127,7 @@ def main(project=Path.cwd()):
                 datetime.datetime.now().strftime("%H:%M:%S")
             )
         )
-        return None
+        sys.exit()
 
     maxee, min_length, max_length = (
         settings["maxEE"].item(),

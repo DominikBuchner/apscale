@@ -112,7 +112,7 @@ def main(project=Path.cwd()):
                 datetime.datetime.now().strftime("%H:%M:%S")
             )
         )
-        return None
+        sys.exit()
     else:
         for primer_sequence in [p5_primer, p7_primer]:
             if (
@@ -126,7 +126,7 @@ def main(project=Path.cwd()):
                         datetime.datetime.now().strftime("%H:%M:%S")
                     )
                 )
-                return None
+                sys.exit()
 
     ## collect the input files from PE merging step
     input = glob.glob(str(Path(project).joinpath("3_PE_merging", "data", "*.fastq.gz")))
