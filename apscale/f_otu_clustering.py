@@ -7,6 +7,7 @@ from io import StringIO
 from tqdm import tqdm
 from openpyxl.utils.dataframe import dataframe_to_rows
 
+
 ## clustering function to cluster all sequences in input fasta with given pct_id
 def otu_clustering(project=None, comp_lvl=None, cores=None, pct_id=None):
     """Function to apply OTU clustering to a given gzipped file. Outputs a fasta file
@@ -314,7 +315,7 @@ def main(project=Path.cwd()):
         )
     )
     otu_table = pd.DataFrame(otu_list, columns=["ID", "Seq"])
-    seq_col = otu_table.pop("Seq")
+    seq_dict = dict(zip(otu_table["ID"], otu_table.pop("Seq")))
 
     ## extract individual OTU tabs from the clustering output, rename columns correctly, merge all individual tabs with the otu table frame
     otu_tabs = glob.glob(
@@ -340,7 +341,12 @@ def main(project=Path.cwd()):
     )
 
     ## move sequences to the end of the dataframe
-    otu_table.insert(len(otu_table.columns), "Seq", seq_col)
+    otu_table["Seq"] = otu_table["ID"].map(seq_dict)
+
+    ## sort the OTU table by OTU nr
+    otu_table["sort"] = otu_table["ID"].str.split("_").str[-1].astype("int")
+    otu_table = otu_table.sort_values(by="sort", axis=0)
+    otu_table = otu_table.drop(labels=["sort"], axis=1)
 
     ## save the final OTU table if option is selected
     if to_excel:

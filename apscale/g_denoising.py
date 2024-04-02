@@ -8,6 +8,7 @@ from io import StringIO
 from tqdm import tqdm
 from openpyxl.utils.dataframe import dataframe_to_rows
 
+
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize
 def denoise(project=None, comp_lvl=None, cores=None, alpha=None, minsize=None):
     """Function to apply denoisind to a given gzipped file. Outputs a fasta file with all
@@ -323,7 +324,7 @@ def main(project=Path.cwd()):
         )
     )
     esv_table = pd.DataFrame(esv_list, columns=["ID", "Seq"])
-    seq_col = esv_table.pop("Seq")
+    seq_dict = dict(zip(esv_table["ID"], esv_table.pop("Seq")))
 
     ## extract individual ESV tabs from the clustering output, rename columns correctly, merge individual tabs
     esv_tabs = glob.glob(
@@ -349,7 +350,12 @@ def main(project=Path.cwd()):
     )
 
     ## move sequences to the end of the dataframe
-    esv_table.insert(len(esv_table.columns), "Seq", seq_col)
+    esv_table["Seq"] = esv_table["ID"].map(seq_dict)
+
+    ## sort the ESV table by OTU nr
+    esv_table["sort"] = esv_table["ID"].str.split("_").str[-1].astype("int")
+    esv_table = esv_table.sort_values(by="sort", axis=0)
+    esv_table = esv_table.drop(labels=["sort"], axis=1)
 
     ## save the final OTU table if selected
     if to_excel:
