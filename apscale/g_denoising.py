@@ -184,7 +184,12 @@ def remapping_esv(file, project=None):
         )
     ) as log_file:
         content = log_file.read()
-        exact_matches = re.findall("Matching query sequences: (\d+)", content)[0]
+        try:
+            exact_matches = re.findall("Matching query sequences: (\d+)", content)[0]
+        except IndexError:
+            exact_matches = re.findall(
+                "Matching unique query sequences: (\d+)", content
+            )[0]
         version = re.findall("vsearch ([\w\.]*)", content)[0]
         finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
