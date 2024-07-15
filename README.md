@@ -161,3 +161,6 @@ The main output of Apscale will be an OTU table and an ESV table, as well as two
 BOLDigger (https://github.com/DominikBuchner/BOLDigger) can be used directly with the output of Apscale to assign taxonomy to the OTUs / ESVs using the Barcode of Life Data system (BOLD) database. Furthermore, the ESV and OTU tables are compatible with TaxonTableTools (https://github.com/TillMacher/TaxonTableTools), which can be used for DNA metabarcoding specific analyses.
 
 ### TODO
+
+Integrate swarm
+Adjust code to vsearch 2.28 output
