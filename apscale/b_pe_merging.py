@@ -4,6 +4,7 @@ from pathlib import Path
 from demultiplexer import file_pairs
 from joblib import Parallel, delayed
 
+
 ## file pair: matching forward and reverse reads, project: folder to write to
 def pe_merge(
     file_pair,
@@ -119,7 +120,10 @@ def main(project=Path.cwd()):
 
     ## collect variables from the settings file
     gen_settings = pd.read_excel(
-        Path(project).joinpath("Settings.xlsx"), sheet_name="0_general_settings"
+        Path(project).joinpath(
+            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        sheet_name="0_general_settings",
     )
     cores, comp_lvl = (
         gen_settings["cores to use"].item(),
@@ -127,7 +131,10 @@ def main(project=Path.cwd()):
     )
 
     settings = pd.read_excel(
-        Path(project).joinpath("Settings.xlsx"), sheet_name="3_PE_merging"
+        Path(project).joinpath(
+            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        sheet_name="3_PE_merging",
     )
     maxdiffpct, maxdiffs, minovlen = (
         settings["maxdiffpct"].item(),
@@ -202,7 +209,9 @@ def main(project=Path.cwd()):
 
     ## create the general logfile
     log_df.to_excel(
-        Path(project).joinpath("Project_report.xlsx"),
+        Path(project).joinpath(
+            "Project_report_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
         index=False,
         sheet_name="3_PE merging",
     )

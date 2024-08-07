@@ -10,6 +10,7 @@ from apscale import (
     h_lulu_filtering,
 )
 
+
 ## main function for the command line interface
 def main():
     ## initialize the parse and display default behavior if called without arguments

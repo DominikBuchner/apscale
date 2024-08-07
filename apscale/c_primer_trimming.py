@@ -6,6 +6,7 @@ from Bio.Data.IUPACData import ambiguous_dna_letters
 from io import StringIO
 from joblib import Parallel, delayed
 
+
 ## function to trim primers of reads of the specified file
 def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchoring=None):
     """Function to remove primer sequences from gzipped file via cutadapt. Outputs

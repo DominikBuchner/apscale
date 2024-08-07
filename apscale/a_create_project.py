@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def create_project(project_name):
-    """Create a new metabarcoding pipeline project with all subfolders"""
+    """Create a new metabarcoding pipeline project with all subfolders."""
 
     ## try to create the project folder
     try:
@@ -15,17 +15,14 @@ def create_project(project_name):
 
     ## generate the subfolder structure
     subfolders = [
-        "1_raw data/data",
+        "1_raw_data/data",
         "2_demultiplexing/data",
         "3_PE_merging/data",
         "4_primer_trimming/data",
         "5_quality_filtering/data",
-        "6_dereplication_pooling/data/dereplication",
-        "6_dereplication_pooling/data/pooling",
-        "7_otu_clustering/data",
-        "8_denoising/data",
-        "9_lulu_filtering/otu_clustering/data",
-        "9_lulu_filtering/denoising/data",
+        "6_dereplication/data",
+        "7_denoising/data",
+        "8_esv_table/data",
     ]
 
     subfolders = [
@@ -36,9 +33,11 @@ def create_project(project_name):
     for folder in subfolders:
         os.makedirs(folder)
 
-    # generate and populate the settings file
+    # generate and populate the settings file, add the project name to the settings file name
     with pd.ExcelWriter(
-        Path("{}_apscale".format(project_name)).joinpath("Settings.xlsx"),
+        Path("{}_apscale".format(project_name)).joinpath(
+            "Settings_{}.xlsx".format(Path(project_name).name)
+        ),
         mode="w",
         engine="openpyxl",
     ) as writer:
@@ -72,37 +71,19 @@ def create_project(project_name):
 
         df_5.to_excel(writer, sheet_name="5_quality_filtering", index=False)
 
-        ## write the 6_dereplication_pooling sheet
-        df_6 = pd.DataFrame([[4]], columns=["min size to pool"])
+        ## write the 6_dereplication sheet
+        df_6 = pd.DataFrame([[4]], columns=["min size"])
 
-        df_6.to_excel(writer, sheet_name="6_dereplication_pooling", index=False)
+        df_6.to_excel(writer, sheet_name="6_dereplication", index=False)
 
-        ## write the 7_otu_clustering sheet
-        df_7 = pd.DataFrame([[97, "True"]], columns=["pct id", "to excel"])
+        ## write the 7_denoising sheet
+        df_7 = pd.DataFrame([[2, 8, "True"]], columns=["alpha", "minsize", "to excel"])
 
-        df_7.to_excel(writer, sheet_name="7_otu_clustering", index=False)
-
-        ## write the 8_denoising sheet
-        df_8 = pd.DataFrame([[2, 8, "True"]], columns=["alpha", "minsize", "to excel"])
-
-        df_8.to_excel(writer, sheet_name="8_denoising", index=False)
-
-        ## write the 8_denoising sheet
-        df_9 = pd.DataFrame(
-            [[84, 95, 1, "True"]],
-            columns=[
-                "minimum similarity",
-                "minimum relative cooccurence",
-                "minimum ratio",
-                "to excel",
-            ],
-        )
-
-        df_9.to_excel(writer, sheet_name="9_lulu_filtering", index=False)
+        df_7.to_excel(writer, sheet_name="7_denoising", index=False)
 
     ## give user output
     print(
-        '{}: "{}" created as a new project.'.format(
+        '{}: "{}_apscale" created as a new project folder.'.format(
             datetime.datetime.now().strftime("%H:%M:%S"), project_name
         )
     )
