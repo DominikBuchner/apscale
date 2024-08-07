@@ -4,9 +4,9 @@ from apscale import (
     b_pe_merging,
     c_primer_trimming,
     d_quality_filtering,
-    e_dereplication_pooling,
+    e_dereplication,
+    f_denoising,
     f_otu_clustering,
-    g_denoising,
     h_lulu_filtering,
 )
 
@@ -78,20 +78,12 @@ def main():
         help="Run the quality_filtering module.",
     )
     modules.add_argument(
-        "--dereplication_pooling",
+        "--dereplication",
         metavar="PATH",
         nargs="?",
         const=False,
         default=argparse.SUPPRESS,
         help="Run the dereplication_pooling module.",
-    )
-    modules.add_argument(
-        "--otu_clustering",
-        metavar="PATH",
-        nargs="?",
-        const=False,
-        default=argparse.SUPPRESS,
-        help="Run the otu_clustering module.",
     )
     modules.add_argument(
         "--denoising",
@@ -100,14 +92,6 @@ def main():
         const=False,
         default=argparse.SUPPRESS,
         help="Run the denoising module.",
-    )
-    modules.add_argument(
-        "--lulu_filtering",
-        metavar="PATH",
-        nargs="?",
-        const=False,
-        default=argparse.SUPPRESS,
-        help="Run the lulu filtering module.",
     )
 
     ## parse command line arguments
@@ -122,18 +106,14 @@ def main():
             b_pe_merging.main()
             c_primer_trimming.main()
             d_quality_filtering.main()
-            e_dereplication_pooling.main()
-            f_otu_clustering.main()
-            g_denoising.main()
-            h_lulu_filtering.main()
+            e_dereplication.main()
+            f_denoising.main()
         else:
             b_pe_merging.main(args.run_apscale)
             c_primer_trimming.main(args.run_apscale)
             d_quality_filtering.main(args.run_apscale)
-            e_dereplication_pooling.main(args.run_apscale)
-            f_otu_clustering.main(args.run_apscale)
-            g_denoising.main(args.run_apscale)
-            h_lulu_filtering.main(args.run_apscale)
+            e_dereplication.main(args.run_apscale)
+            f_denoising.main(args.run_apscale)
 
     ## check if a module was called, then check if an additional argument was called
     if "pe_merging" in args:
@@ -157,31 +137,18 @@ def main():
             d_quality_filtering.main(args.quality_filtering)
 
     ## check if a module was called, then check if an additional argument was called
-    if "dereplication_pooling" in args:
-        if not args.dereplication_pooling:
-            e_dereplication_pooling.main()
+    if "dereplication" in args:
+        if not args.dereplication:
+            e_dereplication.main()
         else:
-            e_dereplication_pooling.main(args.dereplication_pooling)
-
-    ## check if a module was called, then check if an additional argument was called
-    if "otu_clustering" in args:
-        if not args.otu_clustering:
-            f_otu_clustering.main()
-        else:
-            f_otu_clustering.main(args.otu_clustering)
+            e_dereplication.main(args.dereplication)
 
     ## check if a module was called, then check if an additional argument was called
     if "denoising" in args:
         if not args.denoising:
-            g_denoising.main()
+            f_denoising.main()
         else:
-            g_denoising.main(args.denoising)
-
-    if "lulu_filtering" in args:
-        if not args.lulu_filtering:
-            h_lulu_filtering.main()
-        else:
-            h_lulu_filtering.main(args.lulu_filtering)
+            f_denoising.main(args.denoising)
 
     ## print help if no argument is provided
     if len(sys.argv) == 1:

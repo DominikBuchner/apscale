@@ -71,15 +71,10 @@ def create_project(project_name):
 
         df_5.to_excel(writer, sheet_name="5_quality_filtering", index=False)
 
-        ## write the 6_dereplication sheet
-        df_6 = pd.DataFrame([[4]], columns=["min size"])
-
-        df_6.to_excel(writer, sheet_name="6_dereplication", index=False)
-
         ## write the 7_denoising sheet
-        df_7 = pd.DataFrame([[2, 8, "True"]], columns=["alpha", "minsize", "to excel"])
+        df_6 = pd.DataFrame([[2, 4, "True"]], columns=["alpha", "minsize"])
 
-        df_7.to_excel(writer, sheet_name="7_denoising", index=False)
+        df_6.to_excel(writer, sheet_name="6_denoising", index=False)
 
     ## give user output
     print(
