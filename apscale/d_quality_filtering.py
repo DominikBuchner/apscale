@@ -3,6 +3,7 @@ import pandas as pd
 from pathlib import Path
 from joblib import Parallel, delayed
 
+
 ## quality filtering function to quality filter the specified file
 def quality_filtering(
     file, project=None, comp_lvl=None, maxee=None, min_length=None, max_length=None
@@ -109,7 +110,10 @@ def main(project=Path.cwd()):
 
     ## collect variables from the settings file
     gen_settings = pd.read_excel(
-        Path(project).joinpath("Settings.xlsx"), sheet_name="0_general_settings"
+        Path(project).joinpath(
+            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        sheet_name="0_general_settings",
     )
     cores, comp_lvl = (
         gen_settings["cores to use"].item(),
@@ -117,7 +121,10 @@ def main(project=Path.cwd()):
     )
 
     settings = pd.read_excel(
-        Path(project).joinpath("Settings.xlsx"), sheet_name="5_quality_filtering"
+        Path(project).joinpath(
+            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        sheet_name="5_quality_filtering",
     )
 
     # check is the settings are setup correctly
@@ -192,7 +199,9 @@ def main(project=Path.cwd()):
 
     ## add log to the project report
     with pd.ExcelWriter(
-        Path(project).joinpath("Project_report.xlsx"),
+        Path(project).joinpath(
+            "Project_report_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
         mode="a",
         if_sheet_exists="replace",
         engine="openpyxl",

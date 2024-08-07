@@ -93,12 +93,18 @@ def main(project=Path.cwd()):
 
     ## collect variables from the Settings file
     gen_settings = pd.read_excel(
-        Path(project).joinpath("Settings.xlsx"), sheet_name="0_general_settings"
+        Path(project).joinpath(
+            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        sheet_name="0_general_settings",
     )
     cores = gen_settings["cores to use"].item()
 
     settings = settings = pd.read_excel(
-        Path(project).joinpath("Settings.xlsx"), sheet_name="4_primer_trimming"
+        Path(project).joinpath(
+            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        sheet_name="4_primer_trimming",
     )
     p5_primer, p7_primer, anchoring = (
         settings["P5 Primer (5' - 3')"].item(),
@@ -182,7 +188,9 @@ def main(project=Path.cwd()):
 
     ## add log to the project report
     with pd.ExcelWriter(
-        Path(project).joinpath("Project_report.xlsx"),
+        Path(project).joinpath(
+            "Project_report_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
         mode="a",
         if_sheet_exists="replace",
         engine="openpyxl",
