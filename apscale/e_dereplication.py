@@ -37,7 +37,7 @@ def dereplication(file, project=None, comp_lvl=None):
                 ),
                 "--sizeout",
                 "--relabel",
-                "seq_",
+                "seq:",
             ],
             stdout=output,
         )

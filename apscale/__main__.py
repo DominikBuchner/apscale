@@ -6,8 +6,7 @@ from apscale import (
     d_quality_filtering,
     e_dereplication,
     f_denoising,
-    f_otu_clustering,
-    h_lulu_filtering,
+    g_generate_esv_table,
 )
 
 
@@ -93,6 +92,14 @@ def main():
         default=argparse.SUPPRESS,
         help="Run the denoising module.",
     )
+    modules.add_argument(
+        "--generate_esv_table",
+        metavar="PATH",
+        nargs="?",
+        const=False,
+        default=argparse.SUPPRESS,
+        help="Run the ESV table generation module.",
+    )
 
     ## parse command line arguments
     args = parser.parse_args()
@@ -108,12 +115,14 @@ def main():
             d_quality_filtering.main()
             e_dereplication.main()
             f_denoising.main()
+            g_generate_esv_table.main()
         else:
             b_pe_merging.main(args.run_apscale)
             c_primer_trimming.main(args.run_apscale)
             d_quality_filtering.main(args.run_apscale)
             e_dereplication.main(args.run_apscale)
             f_denoising.main(args.run_apscale)
+            g_generate_esv_table.main(args.run_apscale)
 
     ## check if a module was called, then check if an additional argument was called
     if "pe_merging" in args:
@@ -149,6 +158,12 @@ def main():
             f_denoising.main()
         else:
             f_denoising.main(args.denoising)
+
+    if "generate_esv_table" in args:
+        if not args.generate_esv_table:
+            g_generate_esv_table.main()
+        else:
+            g_generate_esv_table.main(args.generate_esv_table)
 
     ## print help if no argument is provided
     if len(sys.argv) == 1:

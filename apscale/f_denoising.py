@@ -1,7 +1,8 @@
-import subprocess, datetime, gzip, os, pickle, glob, openpyxl, shutil, re
+import subprocess, datetime, gzip, os, pickle, glob, openpyxl, shutil, psutil, re, sys, hashlib
 import pandas as pd
 import numpy as np
 from joblib import Parallel, delayed
+from Bio import SeqIO
 from pathlib import Path
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 from io import StringIO
@@ -10,36 +11,25 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize
-def denoise(project=None, comp_lvl=None, cores=None, alpha=None, minsize=None):
+def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
     """Function to apply denoisind to a given gzipped file. Outputs a fasta file with all
     centroid sequences."""
-
     ## define the name for the output fasta
     ## create an output path to write to
-    sample_name_out_1 = "ESVs_with_chimeras.fasta.gz"
-    output_path = Path(project).joinpath("8_denoising", "data", sample_name_out_1)
-
-    ## give user output
-    print(
-        "{}: Starting denoising. This may take a while.".format(
-            datetime.datetime.now().strftime("%H:%M:%S")
-        )
+    sample_name_out_1 = "{}_ESVs_with_chimeras.fasta.gz".format(
+        Path(file).with_suffix("").with_suffix("").name
     )
+    output_path_1 = Path(project).joinpath("7_denoising", "data", sample_name_out_1)
 
-    ## run vsearch --cluster_unoise to cluster OTUs
+    ## run vsearch --cluster_unoise to denoise data to ESV level
     ## use --log because for some reason no info is written to stderr with this command
     ## write stdout to uncompressed output at runtime
-    with open(output_path.with_suffix(""), "w") as output:
+    with open(output_path_1.with_suffix(""), "w") as output:
         f = subprocess.run(
             [
                 "vsearch",
                 "--cluster_unoise",
-                Path(project).joinpath(
-                    "6_dereplication_pooling",
-                    "data",
-                    "pooling",
-                    "pooled_sequences_dereplicated.fasta.gz",
-                ),
+                Path(file),
                 "--unoise_alpha",
                 str(alpha),
                 "--minsize",
@@ -52,200 +42,195 @@ def denoise(project=None, comp_lvl=None, cores=None, alpha=None, minsize=None):
                 str(0),
                 "--quiet",
                 "--log",
-                Path(project).joinpath("8_denoising", "temp", "denoising_log.txt"),
+                Path(project).joinpath(
+                    "7_denoising", "temp", "{}.txt".format(sample_name_out_1)
+                ),
                 "--threads",
-                str(cores),
+                str(1),
             ],
             stdout=output,
             stderr=subprocess.DEVNULL,
         )
 
     ## compress the output, remove uncompressed output
-    with open(output_path.with_suffix(""), "rb") as in_stream, gzip.open(
-        output_path, "wb", comp_lvl
+    with open(output_path_1.with_suffix(""), "rb") as in_stream, gzip.open(
+        output_path_1, "wb", comp_lvl
     ) as out_stream:
         shutil.copyfileobj(in_stream, out_stream)
-    os.remove(output_path.with_suffix(""))
+    os.remove(output_path_1.with_suffix(""))
 
     ## collect processed and passed reads from the log file
     with open(
-        Path(project).joinpath("8_denoising", "temp", "denoising_log.txt")
-    ) as log_file:
-        content = log_file.read()
-        seqs, esvs = (
-            re.findall("(\d+) seqs, min ", content)[0],
-            re.findall("Clusters: (\d+) Size min", content)[0],
-        )
-
-    print(
-        "{}: Denoised unique {} sequences into {} ESVs.".format(
-            datetime.datetime.now().strftime("%H:%M:%S"), seqs, esvs
-        )
-    )
-    print(
-        "{}: Starting chimera removal from the OTUs. This may take a while.".format(
-            datetime.datetime.now().strftime("%H:%M:%S")
-        )
-    )
-
-    ## run vsearch --uchime_denovo to remove chimeric sequences from the OTUs
-    f = subprocess.run(
-        [
-            "vsearch",
-            "--uchime_denovo",
-            Path(project).joinpath("8_denoising", "data", sample_name_out_1),
-            "--relabel",
-            "ESV_",
-            "--nonchimeras",
-            Path(project).joinpath(
-                "8_denoising", "{}_ESVs.fasta".format(Path(project).stem)
-            ),
-            "-fasta_width",
-            str(0),
-            "--quiet",
-        ]
-    )
-
-    ## collect processed and passed reads from the output fasta, since it is not reported in the log
-    f = list(
-        SimpleFastaParser(
-            open(
-                Path(project).joinpath(
-                    "8_denoising", "{}_ESVs.fasta".format(Path(project).stem)
-                )
-            )
-        )
-    )
-    print(
-        "{}: {} chimeras removed from {} ESV sequences.".format(
-            datetime.datetime.now().strftime("%H:%M:%S"), int(esvs) - len(f), esvs
-        )
-    )
-    print(
-        "{}: ESVs saved to {}.".format(
-            datetime.datetime.now().strftime("%H:%M:%S"),
-            Path(project).joinpath(
-                "7_otu_clustering", "{}_OTUs.fasta".format(Path(project).stem)
-            ),
-        )
-    )
-
-
-## remapping function to remap the individual reads to the ESVs via vsearch
-def remapping_esv(file, project=None):
-    """Function to remap the sequences of a dereplicated file against the ESV list
-    as database."""
-
-    ## extract the sample name from the file name for the otu table
-    sample_name_out = "{}".format(
-        Path(file).with_suffix("").with_suffix("").name
-    ).replace("_PE_trimmed_filtered_dereplicated", "")
-
-    ## run vsearch --search_exact to remap the individual files vs the generated
-    ## ESV fasta, capture log and directly pickle the output as dataframe for read table generation
-    f = subprocess.run(
-        [
-            "vsearch",
-            "--search_exact",
-            Path(file),
-            "--db",
-            Path(project).joinpath(
-                "8_denoising", "{}_ESVs.fasta".format(Path(project).stem)
-            ),
-            "--output_no_hits",
-            "--maxhits",
-            "1",
-            "--otutabout",
-            "-",
-            "--quiet",
-            "--threads",
-            str(1),
-            "--log",
-            Path(project).joinpath(
-                "8_denoising", "temp", "{}_mapping_log.txt".format(sample_name_out)
-            ),
-        ],
-        capture_output=True,
-    )
-
-    ## directly parse the output to a pandas dataframe
-    esv_tab = pd.read_csv(StringIO(f.stdout.decode("ascii", errors="ignore")), sep="\t")
-
-    ## handle empty outputs correctly
-    if not esv_tab.empty:
-        esv_tab = esv_tab.set_axis(["ID", sample_name_out], axis=1, copy=False)
-    else:
-        esv_tab[sample_name_out] = ""
-
-    ## collect number of esvs from the output, pickle to logs
-    with open(
         Path(project).joinpath(
-            "8_denoising", "temp", "{}_mapping_log.txt".format(sample_name_out)
+            "7_denoising", "temp", "{}.txt".format(sample_name_out_1)
         )
     ) as log_file:
         content = log_file.read()
         try:
-            exact_matches = re.findall("Matching query sequences: (\d+)", content)[0]
+            seqs, discarded, esvs = (
+                re.findall("(\d+) seqs, min ", content)[0],
+                re.findall("(\d+) sequences discarded.", content)[0],
+                re.findall("Clusters: (\d+) Size min", content)[0],
+            )
+            version = re.findall("vsearch ([\w\.]*)", content)[0]
         except IndexError:
-            exact_matches = re.findall(
-                "Matching unique query sequences: (\d+)", content
-            )[0]
-        version = re.findall("vsearch ([\w\.]*)", content)[0]
-        finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
+            seqs, discarded, esvs = 0, 0, 0
+            version = re.findall("vsearch ([\w\.]*)", content)[0]
 
-    ## give user output
+    # add discarded and used reads for denoising to get a correct number for input sequences
+    seqs = str(int(seqs) + int(discarded))
+
     print(
-        "{}: {}: {} exact matches found ({} reads).".format(
-            datetime.datetime.now().strftime("%H:%M:%S"),
-            sample_name_out,
-            exact_matches,
-            esv_tab[sample_name_out].sum(),
+        "{}: {}: Denoised {} unique sequences into {} ESVs.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"), sample_name_out_1, seqs, esvs
         )
     )
 
-    ## pickle log data first for log generation
+    # exchange the names in the output path
+    output_path_2 = Path(project).joinpath(
+        "7_denoising",
+        "data",
+        sample_name_out_1.replace("_with_chimeras", "_no_chimeras"),
+    )
+
+    ## run vsearch --uchime_denovo to remove chimeric sequences from the ESVs
+    with open(output_path_2.with_suffix(""), "w") as output:
+        f = subprocess.run(
+            [
+                "vsearch",
+                "--uchime_denovo",
+                output_path_1,
+                "--relabel",
+                "ESV_",
+                "--nonchimeras",
+                "-",
+                "-fasta_width",
+                str(0),
+                "--quiet",
+            ],
+            stdout=output,
+            stderr=subprocess.DEVNULL,
+        )
+
+    ## compress the output, remove uncompressed output
+    with open(output_path_2.with_suffix(""), "rb") as in_stream, gzip.open(
+        output_path_2, "wb", comp_lvl
+    ) as out_stream:
+        shutil.copyfileobj(in_stream, out_stream)
+    os.remove(output_path_2.with_suffix(""))
+
+    # remove the files including chimeras afterwards
+    os.remove(Path(project).joinpath("7_denoising", "data", sample_name_out_1))
+
+    ## collect processed and passed reads from the output fasta, since it is not reported in the log
+    f = list(SimpleFastaParser(gzip.open(output_path_2, "rt")))
+
+    # give user output
+    print(
+        "{}: {}: {} chimeras removed from {} ESV sequences.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"),
+            output_path_2.with_suffix("").with_suffix("").name,
+            int(esvs) - len(f),
+            esvs,
+        )
+    )
+
+    # calculate final esv count for logging
+    final_esvs = int(esvs) - (int(esvs) - len(f))
+    finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
+
+    # generate the final output path only for logging, needed in the next step
+    output_path_3 = Path(
+        str(output_path_2).replace(
+            "_PE_trimmed_filtered_dereplicated_ESVs_no_chimeras", ""
+        )
+    )
+
+    # generate output sample name
+    log_sample_name = Path(project).joinpath(
+        "7_denoising",
+        "temp",
+        "{}_log.pkl".format(output_path_3.with_suffix("").with_suffix("").name),
+    )
+
     with open(
-        Path(project).joinpath(
-            "8_denoising", "temp", "{}_log.pkl".format(sample_name_out)
-        ),
+        log_sample_name,
         "wb",
     ) as log:
         pickle.dump(
             [
-                sample_name_out,
+                output_path_3.with_suffix("").with_suffix("").name,
                 finished,
                 version,
-                exact_matches,
-                esv_tab[sample_name_out].sum(),
+                seqs,
+                final_esvs,
             ],
             log,
         )
 
-    ## pickle otu tab dataframes for otu table generation
-    with open(
-        Path(project).joinpath(
-            "8_denoising", "temp", "{}_esv_tab.pkl".format(sample_name_out)
-        ),
-        "wb",
-    ) as log:
-        pickle.dump(esv_tab, log)
+
+def calculate_hash_headers(file, project=None, comp_lvl=None):
+    """Function to transform sequence headers to sha3 256 hashes to easily compare ESV sequences."""
+    ## define the name for the output fasta
+    ## create an output path to write to
+    sample_name_out_1 = "{}_ESVs_with_chimeras.fasta.gz".format(
+        Path(file).with_suffix("").with_suffix("").name
+    )
+
+    # exchange the names in the output path
+    output_path_2 = Path(project).joinpath(
+        "7_denoising",
+        "data",
+        sample_name_out_1.replace("_with_chimeras", "_no_chimeras"),
+    )
+
+    # open the fasta file to a dict
+    fasta_data = SimpleFastaParser(gzip.open(output_path_2, "rt"))
+
+    # generate the final output path
+    output_path_3 = Path(
+        str(output_path_2).replace(
+            "_PE_trimmed_filtered_dereplicated_ESVs_no_chimeras", ""
+        )
+    )
+
+    # write the output
+    with gzip.open(output_path_3, "wt+") as out_stream:
+        for _, seq in fasta_data:
+            seq = seq.upper()
+            header = seq.encode("ascii")
+            header = hashlib.sha3_256(header).hexdigest()
+            out_stream.write(">{}\n{}\n".format(header, seq))
+
+    os.remove(output_path_2)
+
+    # give user output
+    print(
+        "{}: {}: Successfully denoised and hashed.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"),
+            output_path_3.with_suffix("").with_suffix("").name,
+        )
+    )
 
 
 ## main function for the denoising script
 def main(project=Path.cwd()):
     """Main function of the script. Default values can be changed via the input file.
-    Will denoise the dataset, perform chimera removal, remap the individual files and
-    generate an ESV table."""
+    Will denoise the individual files, perform chimera removal on them and exchange the fasta headers with sha-256 hashes for easier processing.
+    """
 
     ## create temporal output folder
     try:
-        os.mkdir(Path(project).joinpath("8_denoising", "temp"))
+        os.mkdir(Path(project).joinpath("7_denoising", "temp"))
     except FileExistsError:
         pass
 
     ## collect variables from the settings file
     gen_settings = pd.read_excel(
-        Path(project).joinpath("Settings.xlsx"), sheet_name="0_general_settings"
+        Path(project).joinpath(
+            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        sheet_name="0_general_settings",
     )
     cores, comp_lvl = (
         gen_settings["cores to use"].item(),
@@ -253,42 +238,52 @@ def main(project=Path.cwd()):
     )
 
     settings = pd.read_excel(
-        Path(project).joinpath("Settings.xlsx"), sheet_name="8_denoising"
+        Path(project).joinpath(
+            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        sheet_name="6_denoising",
     )
-    alpha, minsize, to_excel = (
+    alpha, minsize = (
         settings["alpha"].item(),
         settings["minsize"].item(),
-        settings["to excel"].item(),
     )
 
-    ## denoise the dataset
-    denoise(
-        project=project, comp_lvl=comp_lvl, cores=cores, alpha=alpha, minsize=minsize
-    )
-
-    ## gather files for remapping of ESVs
+    ## collect input files from quality filtering step
     input = glob.glob(
-        str(
-            Path(project).joinpath(
-                "6_dereplication_pooling", "data", "dereplication", "*.fasta.gz"
-            )
-        )
+        str(Path(project).joinpath("6_dereplication", "data", "*.fasta.gz"))
     )
 
+    ## give user output
     print(
-        "{}: Starting to remap {} input files.".format(
-            datetime.datetime.now().strftime("%H:%M:%S"), len(input)
+        "{}: Starting individual denoising and chimera removal.".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
         )
     )
 
-    ## run remapping parallelized to speed up the process
+    ## parallelize the denoising
     Parallel(n_jobs=cores)(
-        delayed(remapping_esv)(file, project=project) for file in input
+        delayed(denoise)(
+            file, project=project, comp_lvl=comp_lvl, alpha=alpha, minsize=minsize
+        )
+        for file in input
+    )
+
+    ## give user output
+    print(
+        "{}: Constructing final ESV fasta files.".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
+
+    # parallelize the has value calculation
+    Parallel(n_jobs=cores)(
+        delayed(calculate_hash_headers)(file, project=project, comp_lvl=comp_lvl)
+        for file in input
     )
 
     ## write log for the denoising from pkl logs
     summary_logs = glob.glob(
-        str(Path(project).joinpath("8_denoising", "temp", "*_log.pkl"))
+        str(Path(project).joinpath("7_denoising", "temp", "*_log.pkl"))
     )
     summary = [pickle.load(open(line, "rb")) for line in summary_logs]
 
@@ -298,130 +293,31 @@ def main(project=Path.cwd()):
             "File",
             "finished at",
             "program version",
-            "exact matches",
-            "reads matched",
+            "unique sequence input",
+            "ESVs",
         ],
     )
     log_df = log_df.sort_values(by="File")
     log_df.to_excel(
-        Path(project).joinpath("8_denoising", "Logfile_8_denoising.xlsx"),
+        Path(project).joinpath("7_denoising", "Logfile_7_denoising.xlsx"),
         index=False,
-        sheet_name="8_denoising",
+        sheet_name="7_denoising",
     )
 
     ## add log to the project report
     with pd.ExcelWriter(
-        Path(project).joinpath("Project_report.xlsx"),
+        Path(project).joinpath(
+            "Project_report_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
         mode="a",
         if_sheet_exists="replace",
         engine="openpyxl",
     ) as writer:
-        log_df.to_excel(writer, sheet_name="8_denoising", index=False)
-
-    ## generate OTU table, first extract all OTUs and sequences from fasta file
-    esv_list = list(
-        SimpleFastaParser(
-            open(
-                Path(project).joinpath(
-                    "8_denoising", "{}_ESVs.fasta".format(Path(project).stem)
-                )
-            )
-        )
-    )
-    esv_table = pd.DataFrame(esv_list, columns=["ID", "Seq"])
-    seq_dict = dict(zip(esv_table["ID"], esv_table.pop("Seq")))
-
-    ## extract individual ESV tabs from the clustering output, rename columns correctly, merge individual tabs
-    esv_tabs = glob.glob(
-        str(Path(project).joinpath("8_denoising", "temp", "*_esv_tab.pkl"))
-    )
-    esv_tabs = [pickle.load(open(tab_file, "rb")) for tab_file in esv_tabs]
-    esv_tabs = [tab.rename(columns={tab.columns[0]: "ID"}) for tab in esv_tabs]
-    esv_tabs = [
-        pd.merge(esv_table, tab, on="ID", how="outer").set_index("ID")
-        for tab in tqdm(esv_tabs, desc="Generating ESV table")
-    ]
-
-    ## collapse all individual dataframes into the ESV table, replace nan values with 0
-    esv_table = pd.concat(esv_tabs, axis=1)
-    esv_table = esv_table.reset_index(level=0).fillna(0)
-    esv_table = pd.concat(
-        [
-            esv_table[["ID"]],
-            esv_table[esv_table.columns.difference(["ID"])].sort_index(axis=1),
-        ],
-        ignore_index=False,
-        axis=1,
-    )
-
-    ## move sequences to the end of the dataframe
-    esv_table["Seq"] = esv_table["ID"].map(seq_dict)
-
-    ## sort the ESV table by OTU nr
-    esv_table["sort"] = esv_table["ID"].str.split("_").str[-1].astype("int")
-    esv_table = esv_table.sort_values(by="sort", axis=0)
-    esv_table = esv_table.drop(labels=["sort"], axis=1)
-
-    ## save the final OTU table if selected
-    if to_excel:
-        wb = openpyxl.Workbook(write_only=True)
-        ws = wb.create_sheet("ESV table")
-
-        ## save the output line by line for optimized memory usage
-        for row in tqdm(
-            dataframe_to_rows(esv_table, index=False, header=True),
-            total=len(esv_table.index),
-            desc="{}: Lines written to ESV table".format(
-                datetime.datetime.now().strftime("%H:%M:%S")
-            ),
-            unit=" lines",
-        ):
-            ws.append(row)
-
-        ## save the output (otu table)
-        print(
-            "{}: Saving the ESV table to excel. This may take a while.".format(
-                datetime.datetime.now().strftime("%H:%M:%S")
-            )
-        )
-        wb.save(
-            Path(project).joinpath(
-                "8_denoising", "{}_ESV_table.xlsx".format(Path(project).stem)
-            )
-        )
-        wb.close()
-        print(
-            "{}: ESV table saved to {}.".format(
-                datetime.datetime.now().strftime("%H:%M:%S"),
-                Path(project).joinpath(
-                    "8_denoising", "{}_ESV_table.xlsx".format(Path(project).stem)
-                ),
-            )
-        )
-
-    print(
-        "{}: Saving the ESV table to parquet. This may take a while.".format(
-            datetime.datetime.now().strftime("%H:%M:%S")
-        )
-    )
-    esv_table.to_parquet(
-        Path(project).joinpath(
-            "8_denoising", "{}_ESV_table.parquet.snappy".format(Path(project).stem)
-        ),
-        index=False,
-    )
-    print(
-        "{}: ESV table saved to {}.".format(
-            datetime.datetime.now().strftime("%H:%M:%S"),
-            Path(project).joinpath(
-                "8_denoising", "{}_ESV_table.parquet.snappy".format(Path(project).stem)
-            ),
-        )
-    )
+        log_df.to_excel(writer, sheet_name="7_denoising", index=False)
 
     ## remove temporary files
-    shutil.rmtree(Path(project).joinpath("8_denoising", "temp"))
+    shutil.rmtree(Path(project).joinpath("7_denoising", "temp"))
 
 
 if __name__ == "__main__":
-    main("")
+    main()
