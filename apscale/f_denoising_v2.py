@@ -84,9 +84,7 @@ def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
     output_path_2 = Path(project).joinpath(
         "7_denoising",
         "data",
-        sample_name_out_1.replace("_with_chimeras", "").replace(
-            "PE_trimmed_filtered_dereplicated_", ""
-        ),
+        sample_name_out_1.replace("_with_chimeras", "_no_chimeras"),
     )
 
     ## run vsearch --uchime_denovo to remove chimeric sequences from the ESVs
@@ -130,12 +128,6 @@ def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
             esvs,
         )
     )
-    print(
-        "{}: ESVs saved to {}.".format(
-            datetime.datetime.now().strftime("%H:%M:%S"),
-            output_path_2,
-        )
-    )
 
 
 def calculate_hash_headers(file, project=None, comp_lvl=None):
@@ -150,25 +142,36 @@ def calculate_hash_headers(file, project=None, comp_lvl=None):
     output_path_2 = Path(project).joinpath(
         "7_denoising",
         "data",
-        sample_name_out_1.replace("_with_chimeras", "").replace(
-            "PE_trimmed_filtered_dereplicated_", ""
-        ),
+        sample_name_out_1.replace("_with_chimeras", "_no_chimeras"),
     )
 
     # open the fasta file to a dict
     fasta_data = SimpleFastaParser(gzip.open(output_path_2, "rt"))
 
     # generate the final output path
-    output_path_3 = Path(str(output_path_2).replace("_ESVs", "_ESV_hash"))
+    output_path_3 = Path(
+        str(output_path_2).replace(
+            "_PE_trimmed_filtered_dereplicated_ESVs_no_chimeras", ""
+        )
+    )
 
     # write the output
     with gzip.open(output_path_3, "wt+") as out_stream:
         for _, seq in fasta_data:
+            seq = seq.upper()
             header = seq.encode("ascii")
             header = hashlib.sha3_256(header).hexdigest()
             out_stream.write(">{}\n{}\n".format(header, seq))
 
     os.remove(output_path_2)
+
+    # give user output
+    print(
+        "{}: {}: Successfully denoised and hashed.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"),
+            output_path_3.with_suffix("").with_suffix("").name,
+        )
+    )
 
 
 ## main function for the denoising script
@@ -233,7 +236,7 @@ def main(project=Path.cwd()):
         )
     )
 
-    ## parallelize the denoising
+    # parallelize the has value calculation
     Parallel(n_jobs=cores)(
         delayed(calculate_hash_headers)(file, project=project, comp_lvl=comp_lvl)
         for file in input
