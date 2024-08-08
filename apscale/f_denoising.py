@@ -93,7 +93,7 @@ def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
         f = subprocess.run(
             [
                 "vsearch",
-                "--uchime_denovo",
+                "--uchime2_denovo",
                 output_path_1,
                 "--relabel",
                 "ESV_",
