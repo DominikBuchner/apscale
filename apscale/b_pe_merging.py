@@ -3,6 +3,7 @@ import pandas as pd
 from pathlib import Path
 from demultiplexer import file_pairs
 from joblib import Parallel, delayed
+from tqdm import tqdm
 
 
 ## file pair: matching forward and reverse reads, project: folder to write to
@@ -86,7 +87,7 @@ def pe_merge(
                 merged,
                 reads,
                 int(merged) / int(reads) * 100,
-            )
+            ),
         )
     except ZeroDivisionError:
         print(

@@ -1,13 +1,8 @@
-import subprocess, datetime, gzip, os, pickle, glob, openpyxl, shutil, psutil, re, sys, hashlib
+import subprocess, datetime, gzip, os, pickle, glob, shutil, re, hashlib
 import pandas as pd
-import numpy as np
 from joblib import Parallel, delayed
-from Bio import SeqIO
 from pathlib import Path
 from Bio.SeqIO.FastaIO import SimpleFastaParser
-from io import StringIO
-from tqdm import tqdm
-from openpyxl.utils.dataframe import dataframe_to_rows
 
 
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize

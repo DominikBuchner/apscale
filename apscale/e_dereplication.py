@@ -1,4 +1,4 @@
-import subprocess, gzip, datetime, glob, os, pickle, openpyxl, shutil, re
+import subprocess, gzip, datetime, glob, os, pickle, shutil, re
 import pandas as pd
 from pathlib import Path
 from joblib import Parallel, delayed
