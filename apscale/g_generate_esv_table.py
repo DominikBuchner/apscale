@@ -120,6 +120,7 @@ def generate_esv_table(project=None):
         esv_table = pd.concat(esv_tabs, axis=1, join="outer").fillna(0)
 
     # sort the data with the most abundant esv on top
+    esv_table = esv_table.copy()
     esv_table["sum"] = esv_table.sum(axis=1)
     esv_table = esv_table.sort_values(by=["sum"], axis=0, ascending=False)
     esv_table = esv_table.drop(labels=["sum"], axis=1)
