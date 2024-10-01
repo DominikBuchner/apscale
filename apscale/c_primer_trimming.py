@@ -1,9 +1,8 @@
-import subprocess, datetime, pickle, glob, os, shutil, sys
+import subprocess, datetime, pickle, glob, os, shutil, sys, json
 import pandas as pd
 from pathlib import Path
 from Bio.Seq import Seq
 from Bio.Data.IUPACData import ambiguous_dna_letters
-from io import StringIO
 from joblib import Parallel, delayed
 
 
@@ -16,6 +15,11 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
     ## extract the filename from the sample path / name and convert to output name
     sample_name_out = "{}_trimmed.fastq.gz".format(
         Path(file).with_suffix("").with_suffix("").name
+    )
+
+    # create a log path to write the json output to
+    log_path = Path(project).joinpath(
+        "4_primer_trimming", "temp", "{}_log.txt".format(sample_name_out)
     )
 
     ## if anchoring is True change the cutadapt call
@@ -35,15 +39,19 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
             file,
             "--discard-untrimmed",
             "--cores=1",
-            "--report=minimal",
+            "--json={}".format(log_path),
+            "--quiet",
         ],
-        capture_output=True,
     )
 
     ## collect processed reads from stderror for the logfile,
     ## handle exception for empty outputs
-    log_df = pd.read_csv(StringIO(f.stdout.decode("ascii", errors="ignore")), sep="\t")
-    reads, cut_reads = log_df["in_reads"].item(), log_df["out_reads"].item()
+    with open(log_path) as cutadapt_output:
+        json_data = json.load(cutadapt_output)
+        reads, cut_reads = (
+            json_data["read_counts"]["input"],
+            json_data["read_counts"]["output"],
+        )
     finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
     ## give user output
@@ -69,11 +77,8 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
         )
 
     ## get remaining log information, pickle temporarly to write the log after successfull finish
-    py_v = sys.version_info
-    py_v = ".".join((str(py_v.major), str(py_v.minor), str(py_v.micro)))
-
-    cutadapt_v = subprocess.run(["cutadapt", "--version"], capture_output=True)
-    cutadapt_v = cutadapt_v.stdout.decode("ascii", errors="ignore").rstrip()
+    py_v = json_data["python_version"]
+    cutadapt_v = json_data["cutadapt_version"]
 
     with open(
         Path(project).joinpath(
