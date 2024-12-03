@@ -61,16 +61,17 @@ def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
         )
     ) as log_file:
         content = log_file.read()
+        # only parse if there is anything in the output
         try:
             seqs, discarded, esvs = (
-                re.findall("(\d+) seqs, min ", content)[0],
-                re.findall("(\d+) sequences discarded.", content)[0],
-                re.findall("Clusters: (\d+) Size min", content)[0],
+                re.findall(r"(\d+) seqs, min ", content)[0],
+                re.findall(r"(\d+) sequences discarded.", content)[0],
+                re.findall(r"Clusters: (\d+) Size min", content)[0],
             )
-            version = re.findall("vsearch ([\w\.]*)", content)[0]
+            version = re.findall(r"vsearch ([\w\.]*)", content)[0]
         except IndexError:
             seqs, discarded, esvs = 0, 0, 0
-            version = re.findall("vsearch ([\w\.]*)", content)[0]
+            version = ""
 
     # add discarded and used reads for denoising to get a correct number for input sequences
     seqs = str(int(seqs) + int(discarded))
@@ -156,7 +157,7 @@ def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
             [
                 output_path_3.with_suffix("").with_suffix("").name,
                 finished,
-                version,
+                version if version else "",
                 seqs,
                 final_esvs,
             ],

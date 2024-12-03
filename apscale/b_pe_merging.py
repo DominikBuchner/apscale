@@ -72,8 +72,8 @@ def pe_merge(
         content = log_file.read()
 
         reads, merged = (
-            re.findall("(\d+)  Pairs", content)[0],
-            re.findall("(\d+)  Merged", content)[0],
+            re.findall(r"(\d+)  Pairs", content)[0],
+            re.findall(r"(\d+)  Merged", content)[0],
         )
 
     finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))

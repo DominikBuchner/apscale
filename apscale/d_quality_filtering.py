@@ -63,8 +63,8 @@ def quality_filtering(
     ) as log_file:
         content = log_file.read()
         kept, discarded = (
-            re.findall("(\d+) sequences kept", content)[0],
-            re.findall("(\d+) sequences discarded", content)[0],
+            re.findall(r"(\d+) sequences kept", content)[0],
+            re.findall(r"(\d+) sequences discarded", content)[0],
         )
         reads = int(kept) + int(discarded)
         version = re.findall("vsearch ([\w\.]*)", content)[0]

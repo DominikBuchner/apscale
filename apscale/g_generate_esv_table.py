@@ -57,12 +57,12 @@ def remap_files_to_esvs(dereplicated_file, esv_file, project=None):
     ) as log_file:
         content = log_file.read()
         try:
-            exact_matches = re.findall("Matching query sequences: (\d+)", content)[0]
+            exact_matches = re.findall(r"Matching query sequences: (\d+)", content)[0]
         except IndexError:
             exact_matches = re.findall(
-                "Matching unique query sequences: (\d+)", content
+                r"Matching unique query sequences: (\d+)", content
             )[0]
-        version = re.findall("vsearch ([\w\.]*)", content)[0]
+        version = re.findall(r"vsearch ([\w\.]*)", content)[0]
         finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
     ## give user output
