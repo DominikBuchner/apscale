@@ -1,7 +1,7 @@
-import subprocess, gzip, glob, pickle, datetime, os, shutil, re
+import subprocess, gzip, glob, pickle, datetime, os, shutil, re, sys
 import pandas as pd
 from pathlib import Path
-from demultiplexer import file_pairs
+from demultiplexer2 import find_file_pairs
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
@@ -29,7 +29,7 @@ def pe_merge(
     )
 
     ## write stdout to uncompressed output at runtime, write stderr to a log file
-    with open(output_path.with_suffix(""), "w") as output, open(log_path, "w") as log:
+    with open(output_path.with_suffix(""), "w") as output:
         ## run vsearch --fastq_mergepairs to merge the file pair
         f = subprocess.run(
             [
@@ -50,9 +50,10 @@ def pe_merge(
                 "--fastq_allowmergestagger",
                 "--threads",
                 str(1),
+                "--log",
+                Path(log_path),
             ],
             stdout=output,
-            stderr=log,
         )
 
     ## compress the output, remove uncompressed output
@@ -144,8 +145,8 @@ def main(project=Path.cwd()):
     )
 
     ## collect all files to merge, find matching file pairs
-    input = glob.glob(
-        str(Path(project).joinpath("2_demultiplexing", "data", "*.fastq.gz"))
+    input = sorted(
+        glob.glob(str(Path(project).joinpath("2_demultiplexing", "data", "*.fastq.gz")))
     )
 
     print(
@@ -153,7 +154,17 @@ def main(project=Path.cwd()):
             datetime.datetime.now().strftime("%H:%M:%S")
         )
     )
-    pairs = file_pairs.main(input)
+    pairs, singles = find_file_pairs.main(input)
+
+    # give user output if singles are found
+    if singles:
+        print(
+            "{}: Some input files do not have a matching file pair. Please check your input.".format(
+                datetime.datetime.now().strftime("%H:%M:%S")
+            )
+        )
+        sys.exit()
+
     print(
         "{}: Found {} matching file pairs in {} input files.".format(
             datetime.datetime.now().strftime("%H:%M:%S"), len(pairs), len(input)
