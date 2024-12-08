@@ -3,23 +3,22 @@ Advanced Pipeline for Simple yet Comprehensive AnaLysEs of DNA metabarcoding dat
 
 ## Introduction
 Apscale is a metabarcoding pipeline that handles the most common tasks in metabarcoding
-pipelines like paired-end merging, primer trimming, quality filtering, otu clustering and
-denoising as well as an otu filtering step. It uses a simple command line interface and is configured via a single configuration file.
+pipelines like paired-end merging, primer trimming, quality filtering and
+denoising. It uses a simple command line interface and is configured via a single configuration file.
 It automatically uses the available ressources on the machine it runs on while still providing the option
 to use less if desired. All modules can be run on their own or as a comprehensive workflow.
 
 A graphical user interface version for apscale is available [here](https://github.com/TillMacher/apscale_gui).
 
 Programs used:
-* vsearch (PE merging, quality filtering, otu clustering, denoising) (https://github.com/torognes/vsearch)
+* vsearch (PE merging, quality filtering, denoising, chimera removal) (https://github.com/torognes/vsearch)
 * cutadapt (primer trimming) (https://github.com/marcelm/cutadapt)
-* lulu (implemented in python for apscale) (https://github.com/tobiasgf/lulu)
 
 Input:
 * demultiplexed gzipped reads
 
 Output:
-* log files, project report, OTU/ESV table
+* log files, project report, ESV table
 
 ## Installation
 
@@ -72,14 +71,14 @@ Compiled with support for bzip2-compressed files, but the library was not found.
 
 ### Further dependencies - cutadapt
 
-Apscale also calls cutadapt with some modules. Cutadapt should be downloaded and installed
+Apscale also calls cutadapt with the primer trimming module. Cutadapt should be downloaded and installed
 automatically with the Apscale installation. To check this, type:
 
 `cutadapt --version`
 
 and it should return the version number, for example:
 
-`3.5`
+`4.1`
 
 ## How to use
 
@@ -99,20 +98,11 @@ C:\USERS\DOMINIK\DESKTOP\EXAMPLE_PROJECT
 │   └───data
 ├───5_quality_filtering
 │   └───data
-├───6_dereplication_pooling
+├───6_dereplication
 │   └───data
-│       ├───dereplication
-│       └───pooling
-├───7_otu_clustering
+├───7_denoising
 │   └───data
-├───8_denoising
-│   └───data
-└───9_lulu_filtering
-    ├───denoising
-    │   └───data
-    └───otu_filtering
-        └───data
-
+└───8_esv_table
 </pre>
 
 A new project can be initialized with the command:
@@ -121,7 +111,7 @@ A new project can be initialized with the command:
 
 If you prefer to have your data all in one place you can copy the raw data into 1_raw_data/data.
 Demultiplexing won't be handled by Apscale because there are to many different tagging systems out there to implement in a single pipeline.
-If you are using inline barcodes you can take a look at https://github.com/DominikBuchner/demultiplexer.
+If you are using inline barcodes you can take a look at https://github.com/DominikBuchner/demultiplexer2.
 If you are already starting with **demultiplexed** data please copy them into 2_demultiplexing/data.
 
 ### Configuring the general settings
@@ -138,8 +128,7 @@ lower the compression level and if disk space is a concern, the compression leve
 ### Configuring the specific settings
 
 Apscale gives default values for most of its settings. They can be changed if desired, please refer to the manual of vsearch and cutadapt
-for further information. The only value Apscale needs from the user is the primers used and the expected length of the fragment excluding which is used
-for quality filtering. After these are set, Apscale is ready to run!
+for further information. The only value Apscale needs from the user is the primers used and the expected length of the fragment excluding the primers which is used for quality filtering. After these are set, Apscale is ready to run!
 
 ### Running Apscale
 
@@ -153,14 +142,9 @@ To run an all-in-one analysis on your dataset run:
 `apscale --run_apscale [PATH]`
 
 The PATH argument is optional and only needs to be used if you are not located in the project folder.
-This will automatically do PE merging, primer trimming, quality filter, OTU clustering and denoising of the data.
+This will automatically do PE merging, primer trimming, quality filter and denoising of the data.
 The individual modules can also be run separately (see `apscale -h` for respective commands). A project report will be saved in the project folder as well as an individual
 report for the individual steps of the pipeline. Information about the versions of the programs used as well as how many reads where used and passed the module as well as a timestamp when the file finished.
 
-The main output of Apscale will be an OTU table and an ESV table, as well as two .fasta files, which can be used for taxonomic assignment. For example, for COI sequences,
-BOLDigger (https://github.com/DominikBuchner/BOLDigger) can be used directly with the output of Apscale to assign taxonomy to the OTUs / ESVs using the Barcode of Life Data system (BOLD) database. Furthermore, the ESV and OTU tables are compatible with TaxonTableTools (https://github.com/TillMacher/TaxonTableTools), which can be used for DNA metabarcoding specific analyses.
-
-### TODO
-
-Integrate swarm
-Adjust code to vsearch 2.28 output
+The main output of Apscale will be an ESV table, as well as a .fasta files, which can be used for taxonomic assignment. For example, for COI sequences,
+BOLDigger3 (https://github.com/DominikBuchner/BOLDigger3) can be used directly with the output of Apscale to assign taxonomy to ESVs using the Barcode of Life Data system (BOLD) database. Furthermore, the ESV tables are compatible with TaxonTableTools (https://github.com/TillMacher/TaxonTableTools), which can be used for DNA metabarcoding specific analyses.

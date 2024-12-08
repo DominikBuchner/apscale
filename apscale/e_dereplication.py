@@ -59,8 +59,8 @@ def dereplication(file, project=None, comp_lvl=None):
         ) as log_file:
             content = log_file.read()
             seqs, unique_seqs = (
-                re.findall(r"(\d+) seqs", content)[0],
-                re.findall(r"(\d+) unique sequences", content)[0],
+                int(re.findall(r"(\d+) seqs", content)[0]),
+                int(re.findall(r"(\d+) unique sequences", content)[0]),
             )
             version = re.findall("vsearch ([\w\.]*)", content)[0]
     else:

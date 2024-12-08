@@ -76,8 +76,8 @@ def pe_merge(
             content = log_file.read()
 
             reads, merged = (
-                re.findall(r"(\d+)  Pairs", content)[0],
-                re.findall(r"(\d+)  Merged", content)[0],
+                int(re.findall(r"(\d+)  Pairs", content)[0]),
+                int(re.findall(r"(\d+)  Merged", content)[0]),
             )
     # create an empty output file, generate data needed for logging
     else:

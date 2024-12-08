@@ -45,7 +45,6 @@ def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
                     ),
                     "--threads",
                     str(1),
-                    "--sizeout",
                 ],
                 stdout=output,
                 stderr=subprocess.DEVNULL,
@@ -59,25 +58,31 @@ def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
         os.remove(output_path_1.with_suffix(""))
 
         ## collect processed and passed reads from the log file
-        with open(
-            Path(project).joinpath(
-                "7_denoising", "temp", "{}.txt".format(sample_name_out_1)
-            )
-        ) as log_file:
-            content = log_file.read()
-            # only parse if there is anything in the output
-            seqs, discarded, esvs = (
-                re.findall(r"(\d+) seqs, min ", content)[0],
-                re.findall(r"(\d+) sequences discarded.", content)[0],
-                re.findall(r"Clusters: (\d+) Size min", content)[0],
-            )
-            version = re.findall(r"vsearch ([\w\.]*)", content)[0]
+        try:
+            with open(
+                Path(project).joinpath(
+                    "7_denoising", "temp", "{}.txt".format(sample_name_out_1)
+                )
+            ) as log_file:
+                content = log_file.read()
+                # only parse if there is anything in the output
+                seqs, discarded, esvs = (
+                    int(re.findall(r"(\d+) seqs, min ", content)[0]),
+                    int(re.findall(r"(\d+) sequences discarded.", content)[0]),
+                    int(re.findall(r"Clusters: (\d+) Size min", content)[0]),
+                )
+                version = re.findall(r"vsearch ([\w\.]*)", content)[0]
+        except IndexError:
+            seqs, discarded, esvs = 0, 0, 0
+            f = subprocess.run(["vsearch", "--version"], capture_output=True)
+            version = f.stderr.decode("ascii", errors="ignore")
+            version = re.findall("vsearch ([\w\.]*)", version)[0]
     else:
         with gzip.open(output_path_1, "wb"):
             seqs, discarded, esvs, version = 0, 0, 0, "empty input"
 
     # add discarded and used reads for denoising to get a correct number for input sequences
-    seqs = str(int(seqs) + int(discarded))
+    seqs = int(seqs) + int(discarded)
 
     print(
         "{}: {}: Denoised {} unique sequences into {} ESVs.".format(
@@ -99,7 +104,7 @@ def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
             f = subprocess.run(
                 [
                     "vsearch",
-                    "--uchime2_denovo",
+                    "--uchime3_denovo",
                     output_path_1,
                     "--relabel",
                     "ESV_",
