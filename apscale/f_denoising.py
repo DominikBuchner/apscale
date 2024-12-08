@@ -1,8 +1,9 @@
-import subprocess, datetime, gzip, os, pickle, glob, shutil, re, hashlib
+import subprocess, datetime, gzip, os, pickle, glob, shutil, re, hashlib, sys
 import pandas as pd
 from joblib import Parallel, delayed
 from pathlib import Path
 from Bio.SeqIO.FastaIO import SimpleFastaParser
+from apscale.a_create_project import empty_file
 
 
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize
@@ -19,62 +20,69 @@ def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
     ## run vsearch --cluster_unoise to denoise data to ESV level
     ## use --log because for some reason no info is written to stderr with this command
     ## write stdout to uncompressed output at runtime
-    with open(output_path_1.with_suffix(""), "w") as output:
-        f = subprocess.run(
-            [
-                "vsearch",
-                "--cluster_unoise",
-                Path(file),
-                "--unoise_alpha",
-                str(alpha),
-                "--minsize",
-                str(minsize),
-                "--sizein",
-                "--sizeout",
-                "--centroids",
-                "-",
-                "--fasta_width",
-                str(0),
-                "--quiet",
-                "--log",
+    # only run if input file is not empty
+    if not empty_file(file):
+        with open(output_path_1.with_suffix(""), "w") as output:
+            f = subprocess.run(
+                [
+                    "vsearch",
+                    "--cluster_unoise",
+                    Path(file),
+                    "--unoise_alpha",
+                    str(alpha),
+                    "--minsize",
+                    str(minsize),
+                    "--sizein",
+                    "--sizeout",
+                    "--centroids",
+                    "-",
+                    "--fasta_width",
+                    str(0),
+                    "--quiet",
+                    "--log",
+                    Path(project).joinpath(
+                        "7_denoising", "temp", "{}.txt".format(sample_name_out_1)
+                    ),
+                    "--threads",
+                    str(1),
+                ],
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+            )
+
+        ## compress the output, remove uncompressed output
+        with open(output_path_1.with_suffix(""), "rb") as in_stream, gzip.open(
+            output_path_1, "wb", comp_lvl
+        ) as out_stream:
+            shutil.copyfileobj(in_stream, out_stream)
+        os.remove(output_path_1.with_suffix(""))
+
+        ## collect processed and passed reads from the log file
+        try:
+            with open(
                 Path(project).joinpath(
                     "7_denoising", "temp", "{}.txt".format(sample_name_out_1)
-                ),
-                "--threads",
-                str(1),
-            ],
-            stdout=output,
-            stderr=subprocess.DEVNULL,
-        )
-
-    ## compress the output, remove uncompressed output
-    with open(output_path_1.with_suffix(""), "rb") as in_stream, gzip.open(
-        output_path_1, "wb", comp_lvl
-    ) as out_stream:
-        shutil.copyfileobj(in_stream, out_stream)
-    os.remove(output_path_1.with_suffix(""))
-
-    ## collect processed and passed reads from the log file
-    with open(
-        Path(project).joinpath(
-            "7_denoising", "temp", "{}.txt".format(sample_name_out_1)
-        )
-    ) as log_file:
-        content = log_file.read()
-        # only parse if there is anything in the output
-        try:
-            seqs, discarded, esvs = (
-                re.findall(r"(\d+) seqs, min ", content)[0],
-                re.findall(r"(\d+) sequences discarded.", content)[0],
-                re.findall(r"Clusters: (\d+) Size min", content)[0],
-            )
-            version = re.findall(r"vsearch ([\w\.]*)", content)[0]
+                )
+            ) as log_file:
+                content = log_file.read()
+                # only parse if there is anything in the output
+                seqs, discarded, esvs = (
+                    int(re.findall(r"(\d+) seqs, min ", content)[0]),
+                    int(re.findall(r"(\d+) sequences discarded.", content)[0]),
+                    int(re.findall(r"Clusters: (\d+) Size min", content)[0]),
+                )
+                version = re.findall(r"vsearch ([\w\.]*)", content)[0]
         except IndexError:
             seqs, discarded, esvs = 0, 0, 0
-            version = ""
+            f = subprocess.run(["vsearch", "--version"], capture_output=True)
+            version = f.stderr.decode("ascii", errors="ignore")
+            version = re.findall("vsearch ([\w\.]*)", version)[0]
+    else:
+        with gzip.open(output_path_1, "wb"):
+            seqs, discarded, esvs, version = 0, 0, 0, "empty input"
 
     # add discarded and used reads for denoising to get a correct number for input sequences
-    seqs = str(int(seqs) + int(discarded))
+    seqs = int(seqs) + int(discarded)
 
     print(
         "{}: {}: Denoised {} unique sequences into {} ESVs.".format(
@@ -90,33 +98,40 @@ def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
     )
 
     ## run vsearch --uchime_denovo to remove chimeric sequences from the ESVs
-    with open(output_path_2.with_suffix(""), "w") as output:
-        f = subprocess.run(
-            [
-                "vsearch",
-                "--uchime2_denovo",
-                output_path_1,
-                "--relabel",
-                "ESV_",
-                "--nonchimeras",
-                "-",
-                "-fasta_width",
-                str(0),
-                "--quiet",
-            ],
-            stdout=output,
-            stderr=subprocess.DEVNULL,
-        )
+    # perform only if the input file is not empty
+    if not empty_file(output_path_1):
+        with open(output_path_2.with_suffix(""), "w") as output:
+            f = subprocess.run(
+                [
+                    "vsearch",
+                    "--uchime3_denovo",
+                    output_path_1,
+                    "--relabel",
+                    "ESV_",
+                    "--nonchimeras",
+                    "-",
+                    "-fasta_width",
+                    str(0),
+                    "--quiet",
+                    "--sizein",
+                    "--sizeout",
+                ],
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+            )
 
-    ## compress the output, remove uncompressed output
-    with open(output_path_2.with_suffix(""), "rb") as in_stream, gzip.open(
-        output_path_2, "wb", comp_lvl
-    ) as out_stream:
-        shutil.copyfileobj(in_stream, out_stream)
-    os.remove(output_path_2.with_suffix(""))
+        ## compress the output, remove uncompressed output
+        with open(output_path_2.with_suffix(""), "rb") as in_stream, gzip.open(
+            output_path_2, "wb", comp_lvl
+        ) as out_stream:
+            shutil.copyfileobj(in_stream, out_stream)
+        os.remove(output_path_2.with_suffix(""))
 
-    # remove the files including chimeras afterwards
-    os.remove(Path(project).joinpath("7_denoising", "data", sample_name_out_1))
+        # remove the files including chimeras afterwards
+        os.remove(Path(project).joinpath("7_denoising", "data", sample_name_out_1))
+    else:
+        with gzip.open(output_path_2, "wb"):
+            os.remove(Path(project).joinpath("7_denoising", "data", sample_name_out_1))
 
     ## collect processed and passed reads from the output fasta, since it is not reported in the log
     f = list(SimpleFastaParser(gzip.open(output_path_2, "rt")))
@@ -192,11 +207,13 @@ def calculate_hash_headers(file, project=None, comp_lvl=None):
 
     # write the output
     with gzip.open(output_path_3, "wt+") as out_stream:
-        for _, seq in fasta_data:
+        for header, seq in fasta_data:
             seq = seq.upper()
+            # parse size annotation from fasta header
+            size = header.split(";")[-1]
             header = seq.encode("ascii")
             header = hashlib.sha3_256(header).hexdigest()
-            out_stream.write(">{}\n{}\n".format(header, seq))
+            out_stream.write(">{};{}\n{}\n".format(header, size, seq))
 
     os.remove(output_path_2)
 

@@ -6,72 +6,41 @@ from io import StringIO
 from joblib import Parallel, delayed
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 from openpyxl.utils.dataframe import dataframe_to_rows
+from Bio.SeqIO.FastaIO import SimpleFastaParser
+from apscale.a_create_project import empty_file
 
 
 # function to perform the remapping of individual read files to individual esv outputs
-def remap_files_to_esvs(dereplicated_file, esv_file, project=None):
+def fasta_to_esv_tab(esv_file, project=None):
     """Function to remap the individual files tothe generated ESVs."""
 
     # extract the sample name from the file of the esvs since it is already shortened in the previous step
     sample_name_out = Path(esv_file).with_suffix("").with_suffix("").name
 
-    # run vsearch --search_exact to remap the individual files to the generated ESVs per file
-    # capture log and directly picke the output as dataframe for read table generation
-    f = subprocess.run(
-        [
-            "vsearch",
-            "--search_exact",
-            Path(dereplicated_file),
-            "--db",
-            Path(esv_file),
-            "--output_no_hits",
-            "--maxhits",
-            "1",
-            "--otutabout",
-            "-",
-            "--quiet",
-            "--threads",
-            "1",
-            "--log",
-            Path(project).joinpath(
-                "8_esv_table", "temp", "{}_mapping_log.txt".format(sample_name_out)
-            ),
-        ],
-        capture_output=True,
-    )
-
-    # directly parse the output to a pandas dataframe for ESV table generation
-    esv_tab = pd.read_csv(StringIO(f.stdout.decode("ascii", errors="ignore")), sep="\t")
-
-    ## handle empty outputs correctly
-    if not esv_tab.empty:
-        esv_tab = esv_tab.set_axis(["ID", sample_name_out], axis=1, copy=False)
+    # parse header and abundance directly from the fasta file if it is not empty
+    if not empty_file(esv_file):
+        fasta_data = [
+            (header.split(";")[0], int(header.split("size=")[-1]))
+            for header, _ in SimpleFastaParser(gzip.open(esv_file, "rt"))
+        ]
     else:
-        esv_tab = pd.DataFrame(data=[], columns=["ID", sample_name_out])
+        fasta_data = []
 
-    ## collect number of esvs from the output, pickle to logs
-    with open(
-        Path(project).joinpath(
-            "8_esv_table", "temp", "{}_mapping_log.txt".format(sample_name_out)
-        )
-    ) as log_file:
-        content = log_file.read()
-        try:
-            exact_matches = re.findall(r"Matching query sequences: (\d+)", content)[0]
-        except IndexError:
-            exact_matches = re.findall(
-                r"Matching unique query sequences: (\d+)", content
-            )[0]
-        version = re.findall(r"vsearch ([\w\.]*)", content)[0]
-        finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
+    # generate the esv tab
+    esv_tab = pd.DataFrame(data=fasta_data, columns=["ID", sample_name_out])
+
+    # save the time when finished
+    finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
+    esvs = len(esv_tab)
+    reads = esv_tab[sample_name_out].sum()
 
     ## give user output
     print(
-        "{}: {}: {} exact matches found ({} reads).".format(
+        "{}: {}: Found {} ESVs with a sum of {} reads.".format(
             datetime.datetime.now().strftime("%H:%M:%S"),
             sample_name_out,
-            exact_matches,
-            esv_tab[sample_name_out].sum(),
+            esvs,
+            reads,
         )
     )
 
@@ -86,9 +55,8 @@ def remap_files_to_esvs(dereplicated_file, esv_file, project=None):
             [
                 sample_name_out,
                 finished,
-                version,
-                exact_matches,
-                esv_tab[sample_name_out].sum(),
+                esvs,
+                reads,
             ],
             log,
         )
@@ -146,6 +114,8 @@ def generate_esv_table(project=None):
     # polulate the dict with the sequences from the fasta file
     for fasta_file in fasta_files:
         for header, seq in SimpleFastaParser(gzip.open(fasta_file, "rt")):
+            # parse the header without size
+            header = header.split(";")[0]
             if not header in fasta_dict.keys():
                 fasta_dict[header] = seq
 
@@ -218,9 +188,6 @@ def generate_esv_table(project=None):
         )
     )
 
-    ## remove temporary files
-    shutil.rmtree(Path(project).joinpath("8_esv_table", "temp"))
-
     # generate the final fasta file for taxonomic identification
     with open(
         Path(project).joinpath(
@@ -254,24 +221,20 @@ def main(project=Path.cwd()):
     cores = gen_settings["cores to use"].item()
 
     # gather input files for remapping and esv files
-    dereplicated_files = sorted(
-        glob.glob(str(Path(project).joinpath("6_dereplication", "data", "*.fasta.gz")))
-    )
     esv_files = sorted(
         glob.glob(str(Path(project).joinpath("7_denoising", "data", "*.fasta.gz")))
     )
 
     # give user output
     print(
-        "{}: Starting to individually remap {} input files.".format(
-            datetime.datetime.now().strftime("%H:%M:%S"), len(dereplicated_files)
+        "{}: Converting {} input fasta files to ESV tabs.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"), len(esv_files)
         )
     )
 
     # run the remapping in parallel
     Parallel(n_jobs=cores)(
-        delayed(remap_files_to_esvs)(dereplicated_file, esv_file, project=project)
-        for dereplicated_file, esv_file in zip(dereplicated_files, esv_files)
+        delayed(fasta_to_esv_tab)(esv_file, project=project) for esv_file in esv_files
     )
 
     # give user output
@@ -283,6 +246,42 @@ def main(project=Path.cwd()):
 
     # construct the final ESV table
     generate_esv_table(project=project)
+
+    # write the log
+    summary_logs = glob.glob(
+        str(Path(project).joinpath("8_esv_table", "temp", "*_log.pkl"))
+    )
+    summary = [pickle.load(open(line, "rb")) for line in summary_logs]
+
+    log_df = pd.DataFrame(
+        summary,
+        columns=[
+            "File",
+            "finished at",
+            "ESVs",
+            "reads",
+        ],
+    )
+    log_df = log_df.sort_values(by="File")
+    log_df.to_excel(
+        Path(project).joinpath("8_esv_table", "Logfile_8_esv_table.xlsx"),
+        index=False,
+        sheet_name="8_esv_table",
+    )
+
+    ## add log to the project report
+    with pd.ExcelWriter(
+        Path(project).joinpath(
+            "Project_report_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        mode="a",
+        if_sheet_exists="replace",
+        engine="openpyxl",
+    ) as writer:
+        log_df.to_excel(writer, sheet_name="8_esv_table", index=False)
+
+    # remove temporary files
+    shutil.rmtree(Path(project).joinpath("8_esv_table", "temp"))
 
     # give user output
     print("{}: Analysis finished.".format(datetime.datetime.now().strftime("%H:%M:%S")))

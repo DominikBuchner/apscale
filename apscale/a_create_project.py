@@ -1,4 +1,4 @@
-import os, psutil, datetime
+import os, psutil, datetime, gzip
 import pandas as pd
 from pathlib import Path
 
@@ -82,3 +82,30 @@ def create_project(project_name):
             datetime.datetime.now().strftime("%H:%M:%S"), project_name
         )
     )
+
+
+def empty_file(file_path: str) -> bool:
+    """Function to check if an input file is empty. Works on gzip compressed files and regular text files.
+
+    Args:
+        file_path (str): Path to the file to be checked
+
+    Returns:
+        bool: Returns True if the input file is emtpy, else False
+    """
+    # convert string to file path
+    file_path = Path(file_path)
+
+    # try gzip file first
+    try:
+        with gzip.open(file_path, "rb") as f:
+            data = f.read(1)
+            if len(data) == 0:
+                return True
+            else:
+                return False
+    except (gzip.BadGzipFile, OSError):
+        if os.stat(file_path).st_size == 0:
+            return True
+        else:
+            return False

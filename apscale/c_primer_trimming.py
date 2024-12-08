@@ -1,9 +1,10 @@
-import subprocess, datetime, pickle, glob, os, shutil, sys, json
+import subprocess, datetime, pickle, glob, os, shutil, sys, json, gzip
 import pandas as pd
 from pathlib import Path
 from Bio.Seq import Seq
 from Bio.Data.IUPACData import ambiguous_dna_letters
 from joblib import Parallel, delayed
+from apscale.a_create_project import empty_file
 
 
 ## function to trim primers of reads of the specified file
@@ -22,36 +23,44 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
         "4_primer_trimming", "temp", "{}_log.txt".format(sample_name_out)
     )
 
+    # create an output path
+    output_path = Path(project).joinpath("4_primer_trimming", "data", sample_name_out)
+
     ## if anchoring is True change the cutadapt call
     if anchoring:
         adapter = "^{}...{}".format(p5_primer, str(Seq(p7_primer).reverse_complement()))
     else:
         adapter = "{}...{}".format(p5_primer, str(Seq(p7_primer).reverse_complement()))
 
-    ## run catadapt
-    f = subprocess.run(
-        [
-            "cutadapt",
-            "-a",
-            adapter,
-            "-o",
-            str(Path(project).joinpath("4_primer_trimming", "data", sample_name_out)),
-            file,
-            "--discard-untrimmed",
-            "--cores=1",
-            "--json={}".format(log_path),
-            "--quiet",
-        ],
-    )
-
-    ## collect processed reads from stderror for the logfile,
-    ## handle exception for empty outputs
-    with open(log_path) as cutadapt_output:
-        json_data = json.load(cutadapt_output)
-        reads, cut_reads = (
-            json_data["read_counts"]["input"],
-            json_data["read_counts"]["output"],
+    ## run catadapt, if input is not empty
+    if not empty_file(file):
+        f = subprocess.run(
+            [
+                "cutadapt",
+                "-a",
+                adapter,
+                "-o",
+                str(output_path),
+                file,
+                "--discard-untrimmed",
+                "--cores=1",
+                "--json={}".format(log_path),
+                "--quiet",
+            ],
         )
+
+        ## collect processed reads from stderror for the logfile,
+        ## handle exception for empty outputs
+        with open(log_path) as cutadapt_output:
+            json_data = json.load(cutadapt_output)
+            reads, cut_reads = (
+                json_data["read_counts"]["input"],
+                json_data["read_counts"]["output"],
+            )
+    else:
+        with gzip.open(output_path, "wb"):
+            reads, cut_reads = 0, 0
+
     finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
     ## give user output
@@ -77,8 +86,11 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
         )
 
     ## get remaining log information, pickle temporarly to write the log after successfull finish
-    py_v = json_data["python_version"]
-    cutadapt_v = json_data["cutadapt_version"]
+    if not empty_file(file):
+        py_v = json_data["python_version"]
+        cutadapt_v = json_data["cutadapt_version"]
+    else:
+        py_v, cutadapt_v = "empty file", "empty input"
 
     with open(
         Path(project).joinpath(

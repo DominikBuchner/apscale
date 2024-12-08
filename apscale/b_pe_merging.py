@@ -1,9 +1,10 @@
-import subprocess, gzip, glob, pickle, datetime, os, shutil, re
+import subprocess, gzip, glob, pickle, datetime, os, shutil, re, sys
 import pandas as pd
 from pathlib import Path
-from demultiplexer import file_pairs
+from demultiplexer2 import find_file_pairs
 from joblib import Parallel, delayed
 from tqdm import tqdm
+from apscale.a_create_project import empty_file
 
 
 ## file pair: matching forward and reverse reads, project: folder to write to
@@ -28,53 +29,60 @@ def pe_merge(
         "3_PE_merging", "temp", "{}_log.txt".format(sample_name_out)
     )
 
-    ## write stdout to uncompressed output at runtime, write stderr to a log file
-    with open(output_path.with_suffix(""), "w") as output, open(log_path, "w") as log:
-        ## run vsearch --fastq_mergepairs to merge the file pair
-        f = subprocess.run(
-            [
-                "vsearch",
-                "--fastq_mergepairs",
-                Path(file_pair[0]),
-                "--reverse",
-                Path(file_pair[1]),
-                "--fastqout",
-                "-",
-                "--quiet",
-                "--fastq_maxdiffpct",
-                str(maxdiffpct),
-                "--fastq_maxdiffs",
-                str(maxdiffs),
-                "--fastq_minovlen",
-                str(minovlen),
-                "--fastq_allowmergestagger",
-                "--threads",
-                str(1),
-            ],
-            stdout=output,
-            stderr=log,
-        )
+    # perform computation on all non empty files
+    if not empty_file(file_pair[0]):
+        ## write stdout to uncompressed output at runtime, write stderr to a log file
+        with open(output_path.with_suffix(""), "w") as output:
+            ## run vsearch --fastq_mergepairs to merge the file pair
+            f = subprocess.run(
+                [
+                    "vsearch",
+                    "--fastq_mergepairs",
+                    Path(file_pair[0]),
+                    "--reverse",
+                    Path(file_pair[1]),
+                    "--fastqout",
+                    "-",
+                    "--quiet",
+                    "--fastq_maxdiffpct",
+                    str(maxdiffpct),
+                    "--fastq_maxdiffs",
+                    str(maxdiffs),
+                    "--fastq_minovlen",
+                    str(minovlen),
+                    "--fastq_allowmergestagger",
+                    "--threads",
+                    str(1),
+                    "--log",
+                    Path(log_path),
+                ],
+                stdout=output,
+            )
 
-    ## compress the output, remove uncompressed output
-    with open(output_path.with_suffix(""), "rb") as in_stream, gzip.open(
-        output_path, "wb", comp_lvl
-    ) as out_stream:
-        shutil.copyfileobj(in_stream, out_stream)
-    os.remove(output_path.with_suffix(""))
+        ## compress the output, remove uncompressed output
+        with open(output_path.with_suffix(""), "rb") as in_stream, gzip.open(
+            output_path, "wb", comp_lvl
+        ) as out_stream:
+            shutil.copyfileobj(in_stream, out_stream)
+        os.remove(output_path.with_suffix(""))
 
-    ## read run info from log file
-    with open(
-        Path(project).joinpath(
-            "3_PE_merging", "temp", "{}_log.txt".format(sample_name_out)
-        ),
-        "rt",
-    ) as log_file:
-        content = log_file.read()
+        ## read run info from log file
+        with open(
+            Path(project).joinpath(
+                "3_PE_merging", "temp", "{}_log.txt".format(sample_name_out)
+            ),
+            "rt",
+        ) as log_file:
+            content = log_file.read()
 
-        reads, merged = (
-            re.findall(r"(\d+)  Pairs", content)[0],
-            re.findall(r"(\d+)  Merged", content)[0],
-        )
+            reads, merged = (
+                int(re.findall(r"(\d+)  Pairs", content)[0]),
+                int(re.findall(r"(\d+)  Merged", content)[0]),
+            )
+    # create an empty output file, generate data needed for logging
+    else:
+        with gzip.open(output_path, "wb", comp_lvl):
+            reads, merged = 0, 0
 
     finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
@@ -101,9 +109,12 @@ def pe_merge(
         )
 
     ## temporarily pickle output for the log file, get vsearch version
-    f = subprocess.run(["vsearch", "--version"], capture_output=True)
-    version = f.stderr.decode("ascii", errors="ignore")
-    version = re.findall("vsearch ([\w\.]*)", version)[0]
+    if not empty_file(file_pair[0]):
+        f = subprocess.run(["vsearch", "--version"], capture_output=True)
+        version = f.stderr.decode("ascii", errors="ignore")
+        version = re.findall("vsearch ([\w\.]*)", version)[0]
+    else:
+        version = "empty input"
 
     with open(
         Path(project).joinpath(
@@ -118,7 +129,6 @@ def main(project=Path.cwd()):
     """Main function of the script. Default values can be changed via the Settings file.
     If default values are desired no arguments are required. Default working directory
     is the current working directory."""
-
     ## collect variables from the settings file
     gen_settings = pd.read_excel(
         Path(project).joinpath(
@@ -144,8 +154,8 @@ def main(project=Path.cwd()):
     )
 
     ## collect all files to merge, find matching file pairs
-    input = glob.glob(
-        str(Path(project).joinpath("2_demultiplexing", "data", "*.fastq.gz"))
+    input = sorted(
+        glob.glob(str(Path(project).joinpath("2_demultiplexing", "data", "*.fastq.gz")))
     )
 
     print(
@@ -153,7 +163,17 @@ def main(project=Path.cwd()):
             datetime.datetime.now().strftime("%H:%M:%S")
         )
     )
-    pairs = file_pairs.main(input)
+    pairs, singles = find_file_pairs.main(input)
+
+    # give user output if singles are found
+    if singles:
+        print(
+            "{}: Some input files do not have a matching file pair. Please check your input.".format(
+                datetime.datetime.now().strftime("%H:%M:%S")
+            )
+        )
+        sys.exit()
+
     print(
         "{}: Found {} matching file pairs in {} input files.".format(
             datetime.datetime.now().strftime("%H:%M:%S"), len(pairs), len(input)
