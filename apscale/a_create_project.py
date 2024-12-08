@@ -104,7 +104,7 @@ def empty_file(file_path: str) -> bool:
                 return True
             else:
                 return False
-    except gzip.BadGzipFile:
+    except (gzip.BadGzipFile, OSError):
         if os.stat(file_path).st_size == 0:
             return True
         else:

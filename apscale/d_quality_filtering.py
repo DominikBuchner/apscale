@@ -2,6 +2,7 @@ import subprocess, gzip, datetime, pickle, glob, os, shutil, re, sys
 import pandas as pd
 from pathlib import Path
 from joblib import Parallel, delayed
+from apscale.a_create_project import empty_file
 
 
 ## quality filtering function to quality filter the specified file
@@ -21,54 +22,61 @@ def quality_filtering(
     # run vsearch --fastq_filter to apply the quality filtering
     # use --log because for some reason no info is written to stderr with this command
     # write stdout to uncompressed output at runtime, write stderr to a log file
-    with open(output_path.with_suffix(""), "w") as output:
-        f = subprocess.run(
-            [
-                "vsearch",
-                "--fastq_filter",
-                Path(file),
-                "--fastaout",
-                "-",
-                "--quiet",
-                "--fasta_width",
-                str(0),
-                "--log",
-                Path(project).joinpath(
-                    "5_quality_filtering", "temp", "{}.txt".format(sample_name_out)
-                ),
-                "--fastq_maxee",
-                str(maxee),
-                "--fastq_minlen",
-                str(min_length),
-                "--fastq_maxlen",
-                str(max_length),
-                "--fastq_qmax",
-                str(64),
-            ],
-            stdout=output,
-        )
+    # run only if input is not empty
+    if not empty_file(file):
+        with open(output_path.with_suffix(""), "w") as output:
+            f = subprocess.run(
+                [
+                    "vsearch",
+                    "--fastq_filter",
+                    Path(file),
+                    "--fastaout",
+                    "-",
+                    "--quiet",
+                    "--fasta_width",
+                    str(0),
+                    "--log",
+                    Path(project).joinpath(
+                        "5_quality_filtering", "temp", "{}.txt".format(sample_name_out)
+                    ),
+                    "--fastq_maxee",
+                    str(maxee),
+                    "--fastq_minlen",
+                    str(min_length),
+                    "--fastq_maxlen",
+                    str(max_length),
+                    "--fastq_qmax",
+                    str(64),
+                ],
+                stdout=output,
+            )
 
-    ## compress the output, remove uncompressed output
-    with open(output_path.with_suffix(""), "rb") as in_stream, gzip.open(
-        output_path, "wb", comp_lvl
-    ) as out_stream:
-        shutil.copyfileobj(in_stream, out_stream)
-    os.remove(output_path.with_suffix(""))
+        ## compress the output, remove uncompressed output
+        with open(output_path.with_suffix(""), "rb") as in_stream, gzip.open(
+            output_path, "wb", comp_lvl
+        ) as out_stream:
+            shutil.copyfileobj(in_stream, out_stream)
+        os.remove(output_path.with_suffix(""))
 
-    ## collect processed and passed reads from the log file
-    with open(
-        Path(project).joinpath(
-            "5_quality_filtering", "temp", "{}.txt".format(sample_name_out)
-        )
-    ) as log_file:
-        content = log_file.read()
-        kept, discarded = (
-            re.findall(r"(\d+) sequences kept", content)[0],
-            re.findall(r"(\d+) sequences discarded", content)[0],
-        )
-        reads = int(kept) + int(discarded)
-        version = re.findall("vsearch ([\w\.]*)", content)[0]
-        finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
+        ## collect processed and passed reads from the log file
+        with open(
+            Path(project).joinpath(
+                "5_quality_filtering", "temp", "{}.txt".format(sample_name_out)
+            )
+        ) as log_file:
+            content = log_file.read()
+            kept, discarded = (
+                re.findall(r"(\d+) sequences kept", content)[0],
+                re.findall(r"(\d+) sequences discarded", content)[0],
+            )
+            reads = int(kept) + int(discarded)
+            version = re.findall("vsearch ([\w\.]*)", content)[0]
+    else:
+        # generate data for logging if input is empty
+        with gzip.open(output_path, "wb"):
+            kept, discarded, reads, version = 0, 0, 0, "empty input"
+
+    finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
     ## Give user output, if 0 reads are the output handle Zero division exception
     try:

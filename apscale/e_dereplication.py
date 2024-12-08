@@ -2,6 +2,7 @@ import subprocess, gzip, datetime, glob, os, pickle, shutil, re
 import pandas as pd
 from pathlib import Path
 from joblib import Parallel, delayed
+from apscale.a_create_project import empty_file
 
 
 ## dereplication function to dereplicate a gzipped fasta file
@@ -20,48 +21,53 @@ def dereplication(file, project=None, comp_lvl=None):
     ## use --log because for some reason no info is written to stderr with this command
     ## relabel to handle different sequencing runs in the otu clustering - seems to only happen if data is downloaded from SRA
     ## write stdout to uncompressed output at runtime
-    with open(output_path.with_suffix(""), "w") as output:
-        f = subprocess.run(
-            [
-                "vsearch",
-                "--fastx_uniques",
-                Path(file),
-                "--fastaout",
-                "-",
-                "--quiet",
-                "--fasta_width",
-                str(0),
-                "--log",
-                Path(project).joinpath(
-                    "6_dereplication", "temp", "{}.txt".format(sample_name_out)
-                ),
-                "--sizeout",
-                "--relabel",
-                "seq:",
-            ],
-            stdout=output,
-        )
+    if not empty_file(file):
+        with open(output_path.with_suffix(""), "w") as output:
+            f = subprocess.run(
+                [
+                    "vsearch",
+                    "--fastx_uniques",
+                    Path(file),
+                    "--fastaout",
+                    "-",
+                    "--quiet",
+                    "--fasta_width",
+                    str(0),
+                    "--log",
+                    Path(project).joinpath(
+                        "6_dereplication", "temp", "{}.txt".format(sample_name_out)
+                    ),
+                    "--sizeout",
+                    "--relabel",
+                    "seq:",
+                ],
+                stdout=output,
+            )
 
-    ## compress the output, remove uncompressed output
-    with open(output_path.with_suffix(""), "rb") as in_stream, gzip.open(
-        output_path, "wb", comp_lvl
-    ) as out_stream:
-        shutil.copyfileobj(in_stream, out_stream)
-    os.remove(output_path.with_suffix(""))
+        ## compress the output, remove uncompressed output
+        with open(output_path.with_suffix(""), "rb") as in_stream, gzip.open(
+            output_path, "wb", comp_lvl
+        ) as out_stream:
+            shutil.copyfileobj(in_stream, out_stream)
+        os.remove(output_path.with_suffix(""))
 
-    ## collect processed and passed reads from the log file
-    with open(
-        Path(project).joinpath(
-            "6_dereplication", "temp", "{}.txt".format(sample_name_out)
-        )
-    ) as log_file:
-        content = log_file.read()
-        seqs, unique_seqs = (
-            re.findall(r"(\d+) seqs", content)[0],
-            re.findall(r"(\d+) unique sequences", content)[0],
-        )
-        version = re.findall("vsearch ([\w\.]*)", content)[0]
-        finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
+        ## collect processed and passed reads from the log file
+        with open(
+            Path(project).joinpath(
+                "6_dereplication", "temp", "{}.txt".format(sample_name_out)
+            )
+        ) as log_file:
+            content = log_file.read()
+            seqs, unique_seqs = (
+                re.findall(r"(\d+) seqs", content)[0],
+                re.findall(r"(\d+) unique sequences", content)[0],
+            )
+            version = re.findall("vsearch ([\w\.]*)", content)[0]
+    else:
+        with gzip.open(output_path, "wb"):
+            seqs, unique_seqs, version = 0, 0, "empty input"
+
+    finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
     ## give user output
     print(

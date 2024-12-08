@@ -1,4 +1,4 @@
-import subprocess, datetime, pickle, glob, os, shutil, sys, json
+import subprocess, datetime, pickle, glob, os, shutil, sys, json, gzip
 import pandas as pd
 from pathlib import Path
 from Bio.Seq import Seq
@@ -23,6 +23,9 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
         "4_primer_trimming", "temp", "{}_log.txt".format(sample_name_out)
     )
 
+    # create an output path
+    output_path = Path(project).joinpath("4_primer_trimming", "data", sample_name_out)
+
     ## if anchoring is True change the cutadapt call
     if anchoring:
         adapter = "^{}...{}".format(p5_primer, str(Seq(p7_primer).reverse_complement()))
@@ -37,9 +40,7 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
                 "-a",
                 adapter,
                 "-o",
-                str(
-                    Path(project).joinpath("4_primer_trimming", "data", sample_name_out)
-                ),
+                str(output_path),
                 file,
                 "--discard-untrimmed",
                 "--cores=1",
@@ -57,7 +58,8 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
                 json_data["read_counts"]["output"],
             )
     else:
-        reads, cut_reads = 0, 0
+        with gzip.open(output_path, "wb"):
+            reads, cut_reads = 0, 0
 
     finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
 
@@ -88,7 +90,7 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
         py_v = json_data["python_version"]
         cutadapt_v = json_data["cutadapt_version"]
     else:
-        py_v, cutadapt_v = "empty file", "empty file"
+        py_v, cutadapt_v = "empty file", "empty input"
 
     with open(
         Path(project).joinpath(
