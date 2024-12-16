@@ -198,12 +198,19 @@ def calculate_hash_headers(file, project=None, comp_lvl=None):
     # open the fasta file to a dict
     fasta_data = SimpleFastaParser(gzip.open(output_path_2, "rt"))
 
+    # define all possible appendices to remove for partial pipeline use
+    appendices = [
+        "_PE_trimmed_filtered_dereplicated_ESVs_no_chimeras",
+        "_trimmed_filtered_dereplicated_ESVs_no_chimeras",
+        "_filtered_dereplicated_ESVs_no_chimeras",
+        "_dereplicated_ESVs_no_chimeras",
+    ]
+
     # generate the final output path
-    output_path_3 = Path(
-        str(output_path_2).replace(
-            "_PE_trimmed_filtered_dereplicated_ESVs_no_chimeras", ""
-        )
-    )
+    for apx in appendices:
+        if apx in str(output_path_2):
+            output_path_3 = Path(str(output_path_2).replace(apx, ""))
+            break
 
     # write the output
     with gzip.open(output_path_3, "wt+") as out_stream:
