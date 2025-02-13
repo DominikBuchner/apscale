@@ -23,6 +23,7 @@ def create_project(project_name):
         "6_dereplication/data",
         "7_denoising/data",
         "8_esv_table",
+        "9_replicate_negative_control_processing",
     ]
 
     subfolders = [
@@ -71,10 +72,23 @@ def create_project(project_name):
 
         df_5.to_excel(writer, sheet_name="5_quality_filtering", index=False)
 
-        ## write the 7_denoising sheet
-        df_6 = pd.DataFrame([[2, 4]], columns=["alpha", "minsize"])
+        ## write the 6_denoising sheet
+        df_6 = pd.DataFrame([[2, 4, "False"]], columns=["alpha", "minsize", "to excel"])
 
         df_6.to_excel(writer, sheet_name="6_denoising", index=False)
+
+        ## write the 6_denoising sheet
+        df_7 = pd.DataFrame(
+            [["True", "_", "True", "NC"]],
+            columns=[
+                "merge replicates",
+                "replicate delimiter",
+                "substract negative controls",
+                "negative control identifier",
+            ],
+        )
+
+        df_7.to_excel(writer, sheet_name="7_replicate_negative_controls", index=False)
 
     ## give user output
     print(
