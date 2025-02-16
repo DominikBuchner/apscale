@@ -77,13 +77,13 @@ def create_project(project_name):
 
         df_6.to_excel(writer, sheet_name="6_denoising", index=False)
 
-        ## write the 6_denoising sheet
+        ## write the 7_replicate negative controls sheet
         df_7 = pd.DataFrame(
             [["True", "_", 2, "True", "NC_"]],
             columns=[
                 "merge replicates",
                 "replicate delimiter",
-                "min replicate count"
+                "minimum replicate presence",
                 "substract negative controls",
                 "negative control prefix",
             ],
