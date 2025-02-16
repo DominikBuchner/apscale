@@ -79,12 +79,13 @@ def create_project(project_name):
 
         ## write the 6_denoising sheet
         df_7 = pd.DataFrame(
-            [["True", "_", "True", "NC"]],
+            [["True", "_", 2, "True", "NC_"]],
             columns=[
                 "merge replicates",
                 "replicate delimiter",
+                "min replicate count"
                 "substract negative controls",
-                "negative control identifier",
+                "negative control prefix",
             ],
         )
 
