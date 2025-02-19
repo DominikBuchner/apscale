@@ -1,4 +1,6 @@
-import datetime
+import datetime, openpyxl
+from tqdm import tqdm
+from openpyxl.utils.dataframe import dataframe_to_rows
 import pandas as pd
 from pathlib import Path
 import numpy as np
@@ -184,7 +186,9 @@ def remove_empty_rows(esv_table: object) -> object:
     return esv_table_clean
 
 
-def save_outputs(esv_table: object, project:str, merging_stats=None, nc_rem_stats=None) -> None:
+def save_outputs(
+    esv_table: object, project: str, merging_stats=None, nc_rem_stats=None
+) -> None:
     """Function to write all output of the merging and negative removal step.
 
     Args:
@@ -194,11 +198,89 @@ def save_outputs(esv_table: object, project:str, merging_stats=None, nc_rem_stat
         nc_rem_stats (object, optional): Dataframe with the negative control removal statistics. Defaults to None.
     """
     # write the updated esv table as parquet and excel
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet("ESV table")
 
-    # write the updated fasta file
+    ## save the output line by line for optimized memory usage
+    for row in tqdm(
+        dataframe_to_rows(esv_table, index=False, header=True),
+        total=len(esv_table.index),
+        desc="{}: Lines written to ESV table".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        ),
+        unit=" lines",
+    ):
+        ws.append(row)
+
+    ## save the output (otu table)
+    print(
+        "{}: Saving the ESV table to excel. This may take a while.".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
+    wb.save(
+        Path(project).joinpath(
+            "9_replicate_negative_control_processing",
+            "{}_ESV_table.xlsx".format(Path(project).stem.replace("_apscale", "")),
+        )
+    )
+    wb.close()
+
+    print(
+        "{}: ESV table saved to {}.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"),
+            Path(project).joinpath(
+                "9_replicate_negative_control_processing",
+                "{}_ESV_table.xlsx".format(Path(project).stem.replace("_apscale", "")),
+            ),
+        )
+    )
+
+    print(
+        "{}: Saving the ESV table to parquet. This may take a while.".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
+    esv_table.to_parquet(
+        Path(project).joinpath(
+            "9_replicate_negative_control_processing",
+            "{}_ESV_table.parquet.snappy".format(
+                Path(project).stem.replace("_apscale", "")
+            ),
+        ),
+        index=False,
+    )
+
+    print(
+        "{}: ESV table saved to {}.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"),
+            Path(project).joinpath(
+                "9_replicate_negative_control_processing",
+                "{}_ESV_table.parquet.snappy".format(
+                    Path(project).stem.replace("_apscale", "")
+                ),
+            ),
+        )
+    )
+
+    # generate the final fasta file for taxonomic identification
+    with open(
+        Path(project).joinpath(
+            "9_replicate_negative_control_processing",
+            "{}_ESVs.fasta".format(Path(project).stem.replace("_apscale", "")),
+        ),
+        "w",
+    ) as out_stream:
+        for unique_id, seq in zip(esv_table["unique_ID"], esv_table["Seq"]):
+            out_stream.write(">{}\n{}\n".format(unique_id, seq))
 
     # add the merging and nc stats to the project report
-    pass
+    if merging_stats:
+        pass
+    
+    if nc_rem_stats:
+        pass
+
 
 def main(project=Path.cwd()) -> None:
     """Main function to merge replicates and remove negative controls from the dataset
@@ -262,7 +344,7 @@ def main(project=Path.cwd()) -> None:
         esv_table = remove_empty_rows(esv_table)
 
         # write outputs and project report
-
+        save_outputs(esv_table, project, merging_stats, nc_rem_stats)
     else:
         print(
             "{}: Replicate merging and negative control substraction disabled. Skipping step.".format(
