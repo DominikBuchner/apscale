@@ -1,3 +1,4 @@
+import datetime
 import pandas as pd
 from pathlib import Path
 import numpy as np
@@ -50,13 +51,68 @@ def merge_replicates(
         [merged_table.iloc[:, :1], unique_ids, merged_table.iloc[:, 1:], seqs], axis=1
     )
 
+    # define merging stats
+    merging_stats = []
+
     # calculate removed ESVs and removed reads
     for sample_name in sample_names:
         # sum of reads pre and post filtered
         pre_merged_reads = pre_merged_table.filter(regex=sample_name).to_numpy().sum()
         post_merged_reads = merged_table.filter(regex=sample_name).to_numpy().sum()
-        print(sample_name)
-        print(post_merged_reads / pre_merged_reads)
+
+        # calculate pre merged esvs and post merged esvs
+        pre_merged_esvs = np.count_nonzero(
+            pre_merged_table.filter(regex=sample_name).sum(axis=1)
+        )
+        post_merged_esvs = np.count_nonzero(
+            merged_table.filter(regex=sample_name).sum(axis=1)
+        )
+        merging_stats.append(
+            (
+                sample_name,
+                pre_merged_reads,
+                post_merged_reads,
+                pre_merged_esvs,
+                post_merged_esvs,
+            )
+        )
+
+        # calculate removed reads
+        if pre_merged_reads != 0:
+            retained_reads = (
+                (pre_merged_reads - post_merged_reads) * 100 / pre_merged_reads
+            )
+        else:
+            retained_reads = 100
+
+        if pre_merged_esvs != 0:
+            retained_esvs = ((pre_merged_esvs - post_merged_esvs) * 100 / pre_merged_esvs)
+        else:
+            retained_esvs = 100
+        # give user output
+        print(
+            "{}: {}: {:.2f} % of reads removed. {:.2f} % of ESVs removed".format(
+                datetime.datetime.now().strftime("%H:%M:%S"),
+                sample_name,
+                retained_reads,
+                retained_esvs
+            )
+        )
+
+    # transform merging stats to dataframe
+    merging_stats = pd.DataFrame(
+        data=merging_stats,
+        columns=[
+            "sample name",
+            "pre merging reads",
+            "post merging reads",
+            "pre merging esvs",
+            "post merging esvs",
+        ],
+    )
+
+    return merged_table, merging_stats
+
 
 def main(project=Path.cwd()) -> None:
     """Main function to merge replicates and remove negative controls from the dataset
@@ -93,6 +149,19 @@ def main(project=Path.cwd()) -> None:
 
     # merge replicates first (optional)
     if replicate_merging:
-        merge_replicates(esv_table, replicate_del, minimum_presence)
+        # give user output
+        print(
+            "{}: Starting replicate merging.".format(
+                datetime.datetime.now().strftime("%H:%M:%S")
+            )
+        )
+
+        merged_table, merging_stats = merge_replicates(
+            esv_table, replicate_del, minimum_presence
+        )
 
     # remove negative controls afterward (optional)
+
+    # remove empty rows and columns from the esv table
+
+    # write outputs and project report
