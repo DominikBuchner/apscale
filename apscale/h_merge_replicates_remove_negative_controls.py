@@ -275,11 +275,41 @@ def save_outputs(
             out_stream.write(">{}\n{}\n".format(unique_id, seq))
 
     # add the merging and nc stats to the project report
-    if merging_stats:
-        pass
-    
-    if nc_rem_stats:
-        pass
+    if len(merging_stats.index) != 0:
+        ## add log to the project report
+        with pd.ExcelWriter(
+            Path(project).joinpath(
+                "Project_report_{}.xlsx".format(
+                    Path(project).name.replace("_apscale", "")
+                )
+            ),
+            mode="a",
+            if_sheet_exists="replace",
+            engine="openpyxl",
+        ) as writer:
+            merging_stats.to_excel(
+                writer, sheet_name="9_replicate_merging", index=False
+            )
+
+    if len(nc_rem_stats.index) != 0:
+        ## add log to the project report
+        with pd.ExcelWriter(
+            Path(project).joinpath(
+                "Project_report_{}.xlsx".format(
+                    Path(project).name.replace("_apscale", "")
+                )
+            ),
+            mode="a",
+            if_sheet_exists="replace",
+            engine="openpyxl",
+        ) as writer:
+            merging_stats.to_excel(writer, sheet_name="10_nc_removal", index=False)
+
+    print(
+        "{}: Logfiles writen and saved.".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
 
 
 def main(project=Path.cwd()) -> None:
@@ -327,6 +357,17 @@ def main(project=Path.cwd()) -> None:
         esv_table, merging_stats = merge_replicates(
             esv_table, replicate_del, minimum_presence
         )
+    else:
+        merging_stats = pd.DataFrame(
+            data=[],
+            columns=[
+                "sample_name",
+                "pre merging reads",
+                "post merging reads",
+                "pre merging esvs",
+                "post merging esvs",
+            ],
+        )
 
     # remove negative controls afterward (optional)
     if substract_ncs:
@@ -338,6 +379,8 @@ def main(project=Path.cwd()) -> None:
         )
 
         esv_table, nc_rem_stats = substract_neg_controls(esv_table, nc_prefix)
+    else:
+        nc_rem_stats = pd.DataFrame(data=[], columsn=["esv", "substracted reads"])
 
     # remove empty rows and columns from the esv table
     if replicate_merging or substract_ncs:
