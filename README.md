@@ -103,6 +103,7 @@ C:\USERS\DOMINIK\DESKTOP\EXAMPLE_PROJECT
 ├───7_denoising
 │   └───data
 └───8_esv_table
+└───9_replicate_negative_control_processing  
 </pre>
 
 A new project can be initialized with the command:
@@ -128,7 +129,9 @@ lower the compression level and if disk space is a concern, the compression leve
 ### Configuring the specific settings
 
 Apscale gives default values for most of its settings. They can be changed if desired, please refer to the manual of vsearch and cutadapt
-for further information. The only value Apscale needs from the user is the primers used and the expected length of the fragment excluding the primers which is used for quality filtering. After these are set, Apscale is ready to run!
+for further information. The only value Apscale needs from the user is the primers used and the expected length of the fragment excluding the primers which is used for quality filtering. 
+If apscale should automatically merge replicates (keep reads only found in x replicates) or should remove the maximum reads from all negative controls from the respected ESV, this can be set in the last tab.
+After these are set, Apscale is ready to run!
 
 ### Running Apscale
 
