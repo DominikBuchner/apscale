@@ -7,6 +7,7 @@ from apscale import (
     e_dereplication,
     f_denoising,
     g_generate_esv_table,
+    h_merge_replicates_remove_negative_controls,
 )
 
 
@@ -100,6 +101,14 @@ def main():
         default=argparse.SUPPRESS,
         help="Run the ESV table generation module.",
     )
+    modules.add_argument(
+        "--merge_replicates_remove_negative_controls",
+        metavar="PATH",
+        nargs="?",
+        const=False,
+        default=argparse.SUPPRESS,
+        help="Merge replicates and / or remove negative controls from the dataset.",
+    )
 
     ## parse command line arguments
     args = parser.parse_args()
@@ -116,6 +125,7 @@ def main():
             e_dereplication.main()
             f_denoising.main()
             g_generate_esv_table.main()
+            h_merge_replicates_remove_negative_controls.main()
         else:
             b_pe_merging.main(args.run_apscale)
             c_primer_trimming.main(args.run_apscale)
@@ -123,6 +133,7 @@ def main():
             e_dereplication.main(args.run_apscale)
             f_denoising.main(args.run_apscale)
             g_generate_esv_table.main(args.run_apscale)
+            h_merge_replicates_remove_negative_controls.main(args.run_apscale)
 
     ## check if a module was called, then check if an additional argument was called
     if "pe_merging" in args:
@@ -164,6 +175,12 @@ def main():
             g_generate_esv_table.main()
         else:
             g_generate_esv_table.main(args.generate_esv_table)
+
+    if "merge_replicates_remove_negative_controls" in args:
+        if not args.merge_replicates_remove_negative_controls:
+            h_merge_replicates_remove_negative_controls.main()
+        else:
+            h_merge_replicates_remove_negative_controls.main(args.merge_replicates_remove_negative_controls)
 
     ## print help if no argument is provided
     if len(sys.argv) == 1:

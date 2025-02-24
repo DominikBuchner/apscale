@@ -72,7 +72,7 @@ def fasta_to_esv_tab(esv_file, project=None):
 
 
 # function to generate the final esv table
-def generate_esv_table(project=None):
+def generate_esv_table(project=None, to_excel = None):
     """Function to generate the final esv table from the output of the previous step."""
     # find all esv tabs
     esv_tabs = glob.glob(
@@ -122,44 +122,45 @@ def generate_esv_table(project=None):
     # add the sequences to the final ESV table
     esv_table["Seq"] = esv_table["unique_ID"].map(fasta_dict)
 
-    # save the esv table in excel and parquet format
-    wb = openpyxl.Workbook(write_only=True)
-    ws = wb.create_sheet("ESV table")
+    # save the esv table in excel and parquet format if option is set
+    if to_excel:
+        wb = openpyxl.Workbook(write_only=True)
+        ws = wb.create_sheet("ESV table")
 
-    ## save the output line by line for optimized memory usage
-    for row in tqdm(
-        dataframe_to_rows(esv_table, index=False, header=True),
-        total=len(esv_table.index),
-        desc="{}: Lines written to ESV table".format(
-            datetime.datetime.now().strftime("%H:%M:%S")
-        ),
-        unit=" lines",
-    ):
-        ws.append(row)
+        ## save the output line by line for optimized memory usage
+        for row in tqdm(
+            dataframe_to_rows(esv_table, index=False, header=True),
+            total=len(esv_table.index),
+            desc="{}: Lines written to ESV table".format(
+                datetime.datetime.now().strftime("%H:%M:%S")
+            ),
+            unit=" lines",
+        ):
+            ws.append(row)
 
-    ## save the output (otu table)
-    print(
-        "{}: Saving the ESV table to excel. This may take a while.".format(
-            datetime.datetime.now().strftime("%H:%M:%S")
+        ## save the output (otu table)
+        print(
+            "{}: Saving the ESV table to excel. This may take a while.".format(
+                datetime.datetime.now().strftime("%H:%M:%S")
+            )
         )
-    )
-    wb.save(
-        Path(project).joinpath(
-            "8_esv_table",
-            "{}_ESV_table.xlsx".format(Path(project).stem.replace("_apscale", "")),
-        )
-    )
-    wb.close()
-
-    print(
-        "{}: ESV table saved to {}.".format(
-            datetime.datetime.now().strftime("%H:%M:%S"),
+        wb.save(
             Path(project).joinpath(
                 "8_esv_table",
                 "{}_ESV_table.xlsx".format(Path(project).stem.replace("_apscale", "")),
-            ),
+            )
         )
-    )
+        wb.close()
+
+        print(
+            "{}: ESV table saved to {}.".format(
+                datetime.datetime.now().strftime("%H:%M:%S"),
+                Path(project).joinpath(
+                    "8_esv_table",
+                    "{}_ESV_table.xlsx".format(Path(project).stem.replace("_apscale", "")),
+                ),
+            )
+        )
 
     print(
         "{}: Saving the ESV table to parquet. This may take a while.".format(
@@ -219,6 +220,16 @@ def main(project=Path.cwd()):
         sheet_name="0_general_settings",
     )
     cores = gen_settings["cores to use"].item()
+    
+    # read setting for the step from denoising tab
+    settings = pd.read_excel(
+        Path(project).joinpath(
+            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        sheet_name="6_denoising",
+    )
+
+    to_excel = bool(settings["to excel"].item())
 
     # gather input files for remapping and esv files
     esv_files = sorted(
@@ -245,7 +256,7 @@ def main(project=Path.cwd()):
     )
 
     # construct the final ESV table
-    generate_esv_table(project=project)
+    generate_esv_table(project=project, to_excel = to_excel)
 
     # write the log
     summary_logs = glob.glob(
