@@ -6,7 +6,7 @@ from apscale.a_create_project import empty_file
 
 
 ## dereplication function to dereplicate a gzipped fasta file
-def dereplication(file, project=None, comp_lvl=None):
+def dereplication(file, project=None, comp_lvl=None, minimum_seq_abundance=None):
     """Function to dereplicate a gzipped fasta file. Abundance annotations will be
     written to the output fasta."""
 
@@ -28,6 +28,8 @@ def dereplication(file, project=None, comp_lvl=None):
                     "vsearch",
                     "--fastx_uniques",
                     Path(file),
+                    "--minuniquesize",
+                    str(minimum_seq_abundance),
                     "--fastaout",
                     "-",
                     "--quiet",
@@ -102,9 +104,10 @@ def main(project=Path.cwd()):
         ),
         sheet_name="0_general_settings",
     )
-    cores, comp_lvl = (
+    cores, comp_lvl, min_abundance = (
         gen_settings["cores to use"].item(),
         gen_settings["compression level"].item(),
+        gen_settings["minimum sequence abundance"].item(),
     )
 
     ## collect input files from quality filtering step
@@ -126,7 +129,9 @@ def main(project=Path.cwd()):
 
     ## parallelize the dereplication
     Parallel(n_jobs=cores)(
-        delayed(dereplication)(file, project=project, comp_lvl=comp_lvl)
+        delayed(dereplication)(
+            file, project=project, comp_lvl=comp_lvl, minimum_seq_abundace=min_abundance
+        )
         for file in input
     )
 

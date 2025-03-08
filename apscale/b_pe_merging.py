@@ -24,9 +24,9 @@ def pe_merge(
     sample_name_out = "{}_PE.fastq.gz".format(
         "_".join(Path(file_pair[0]).name.split("_")[:-1])
     )
-    output_path = Path(project).joinpath("3_PE_merging", "data", sample_name_out)
+    output_path = Path(project).joinpath("03_PE_merging", "data", sample_name_out)
     log_path = Path(project).joinpath(
-        "3_PE_merging", "temp", "{}_log.txt".format(sample_name_out)
+        "03_PE_merging", "temp", "{}_log.txt".format(sample_name_out)
     )
 
     # perform computation on all non empty files
@@ -69,7 +69,7 @@ def pe_merge(
         ## read run info from log file
         with open(
             Path(project).joinpath(
-                "3_PE_merging", "temp", "{}_log.txt".format(sample_name_out)
+                "03_PE_merging", "temp", "{}_log.txt".format(sample_name_out)
             ),
             "rt",
         ) as log_file:
@@ -118,7 +118,7 @@ def pe_merge(
 
     with open(
         Path(project).joinpath(
-            "3_PE_merging", "temp", "{}.pkl".format(sample_name_out)
+            "03_PE_merging", "temp", "{}.pkl".format(sample_name_out)
         ),
         "wb",
     ) as log:
@@ -145,7 +145,7 @@ def main(project=Path.cwd()):
         Path(project).joinpath(
             "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
         ),
-        sheet_name="3_PE_merging",
+        sheet_name="03_PE_merging",
     )
     maxdiffpct, maxdiffs, minovlen = (
         settings["maxdiffpct"].item(),
@@ -155,7 +155,9 @@ def main(project=Path.cwd()):
 
     ## collect all files to merge, find matching file pairs
     input = sorted(
-        glob.glob(str(Path(project).joinpath("2_demultiplexing", "data", "*.fastq.gz")))
+        glob.glob(
+            str(Path(project).joinpath("02_demultiplexing", "data", "*.fastq.gz"))
+        )
     )
 
     print(
@@ -187,7 +189,7 @@ def main(project=Path.cwd()):
 
     ## create folder for temporal output files
     try:
-        os.mkdir(Path(project).joinpath("3_PE_merging", "temp"))
+        os.mkdir(Path(project).joinpath("03_PE_merging", "temp"))
     except FileExistsError:
         pass
 
@@ -206,7 +208,7 @@ def main(project=Path.cwd()):
 
     ## write the log file from pkl log, remove logs after
     summary_logs = glob.glob(
-        str(Path(project).joinpath("3_PE_merging", "temp", "*.pkl"))
+        str(Path(project).joinpath("03_PE_merging", "temp", "*.pkl"))
     )
     summary = [pickle.load(open(line, "rb")) for line in summary_logs]
 
@@ -223,9 +225,9 @@ def main(project=Path.cwd()):
     )
     log_df = log_df.sort_values(by="File")
     log_df.to_excel(
-        Path(project).joinpath("3_PE_merging", "Logfile_3_PE_merging.xlsx"),
+        Path(project).joinpath("03_PE_merging", "Logfile_03_PE_merging.xlsx"),
         index=False,
-        sheet_name="3_PE_merging",
+        sheet_name="03_PE_merging",
     )
 
     ## create the general logfile
@@ -234,11 +236,11 @@ def main(project=Path.cwd()):
             "Project_report_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
         ),
         index=False,
-        sheet_name="3_PE merging",
+        sheet_name="03_PE merging",
     )
 
     ## remove temporally saved logs from single files
-    shutil.rmtree(Path(project).joinpath("3_PE_merging", "temp"))
+    shutil.rmtree(Path(project).joinpath("03_PE_merging", "temp"))
 
 
 if __name__ == "__main__":
