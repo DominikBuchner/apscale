@@ -20,11 +20,11 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
 
     # create a log path to write the json output to
     log_path = Path(project).joinpath(
-        "4_primer_trimming", "temp", "{}_log.txt".format(sample_name_out)
+        "04_primer_trimming", "temp", "{}_log.txt".format(sample_name_out)
     )
 
     # create an output path
-    output_path = Path(project).joinpath("4_primer_trimming", "data", sample_name_out)
+    output_path = Path(project).joinpath("04_primer_trimming", "data", sample_name_out)
 
     ## if anchoring is True change the cutadapt call
     if anchoring:
@@ -94,7 +94,7 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
 
     with open(
         Path(project).joinpath(
-            "4_primer_trimming", "temp", "{}.pkl".format(sample_name_out)
+            "04_primer_trimming", "temp", "{}.pkl".format(sample_name_out)
         ),
         "wb",
     ) as log:
@@ -121,7 +121,7 @@ def main(project=Path.cwd()):
         Path(project).joinpath(
             "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
         ),
-        sheet_name="4_primer_trimming",
+        sheet_name="04_primer_trimming",
     )
     p5_primer, p7_primer, anchoring = (
         settings["P5 Primer (5' - 3')"].item(),
@@ -153,7 +153,9 @@ def main(project=Path.cwd()):
                 sys.exit()
 
     ## collect the input files from PE merging step
-    input = glob.glob(str(Path(project).joinpath("3_PE_merging", "data", "*.fastq.gz")))
+    input = glob.glob(
+        str(Path(project).joinpath("03_PE_merging", "data", "*.fastq.gz"))
+    )
 
     print(
         "{}: Starting to trim primers of {} input files.".format(
@@ -163,7 +165,7 @@ def main(project=Path.cwd()):
 
     ## create temporal output folder
     try:
-        os.mkdir(Path(project).joinpath("4_primer_trimming", "temp"))
+        os.mkdir(Path(project).joinpath("04_primer_trimming", "temp"))
     except FileExistsError:
         pass
 
@@ -180,7 +182,7 @@ def main(project=Path.cwd()):
 
     ## write logfile from pkl log, remove single logs after
     summary_logs = glob.glob(
-        str(Path(project).joinpath("4_primer_trimming", "temp", "*.pkl"))
+        str(Path(project).joinpath("04_primer_trimming", "temp", "*.pkl"))
     )
     summary = [pickle.load(open(line, "rb")) for line in summary_logs]
 
@@ -198,9 +200,9 @@ def main(project=Path.cwd()):
     )
     log_df = log_df.sort_values(by="File")
     log_df.to_excel(
-        Path(project).joinpath("4_primer_trimming", "Logfile_4_primer_trimming.xlsx"),
+        Path(project).joinpath("04_primer_trimming", "Logfile_04_primer_trimming.xlsx"),
         index=False,
-        sheet_name="4_primer_trimming",
+        sheet_name="04_primer_trimming",
     )
 
     ## add log to the project report
@@ -212,10 +214,10 @@ def main(project=Path.cwd()):
         if_sheet_exists="replace",
         engine="openpyxl",
     ) as writer:
-        log_df.to_excel(writer, sheet_name="4_primer_trimming", index=False)
+        log_df.to_excel(writer, sheet_name="04_primer_trimming", index=False)
 
     ## remove temporary files
-    shutil.rmtree(Path(project).joinpath("4_primer_trimming", "temp"))
+    shutil.rmtree(Path(project).joinpath("04_primer_trimming", "temp"))
 
 
 if __name__ == "__main__":
