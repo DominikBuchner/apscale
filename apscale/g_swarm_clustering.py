@@ -1,7 +1,196 @@
-import datetime, os, glob
-from pathlib import Path
+import datetime, os, glob, gzip, shutil, subprocess, re, pickle
 import pandas as pd
-from apscale.a_create_project import choose_input
+from pathlib import Path
+from joblib import Parallel, delayed
+from apscale.a_create_project import choose_input, empty_file
+
+
+def unzip_inputs(file: str, project=None) -> None:
+    """_summary_
+
+    Args:
+        file (str): Path to the file to unzip
+        project (_type_, optional): Project to work in. Defaults to None.
+    """
+    # define the output name
+    unzipped_output = Path(project).joinpath(
+        "08_swarm_clustering", "temp", Path(file).stem
+    )
+
+    # write the output
+    with gzip.open(file, "rt") as in_stream:
+        with open(unzipped_output, "wt") as out_stream:
+            shutil.copyfileobj(in_stream, out_stream)
+
+
+def swarm_clustering(file, project=None, comp_lvl=None, prior_step=None):
+    """Function to perform swarm clustering on a given input. Outputs a fasta file with all centroid sequences.
+
+    Args:
+        file (str): Input file to run swarm on.
+        project (str, optional): Project to work in. Defaults to None.
+        comp_lvl (int, optional): Compression level for gzip to use. Defaults to None.
+        prior_step (str, optional): Which step was performed before. Important for renaming files accordingly. Defaults to None.
+    """
+    # decide which output name to use
+    if prior_step == "07_denoising":
+        sample_name_out_1 = "{}.gz".format(Path(file).name)
+        output_path_1 = Path(project).joinpath(
+            "08_swarm_clustering", "data", sample_name_out_1
+        )
+    elif prior_step == "06_dereplication":
+        sample_name_out_1 = "{}_OTUs_with_chimeras.fasta.gz".format(
+            Path(file).with_suffix("").with_suffix("").name
+        )
+        output_path_1 = Path(project).joinpath(
+            "08_swarm_clustering", "temp", sample_name_out_1
+        )
+
+    # run swarm if the input is not empty
+    if not empty_file(file):
+        f = subprocess.run(
+            [
+                "swarm",
+                Path(file),
+                "-f",
+                "-z",
+                "-w",
+                output_path_1.with_suffix(""),
+                "-l",
+                Path(project).joinpath(
+                    "08_swarm_clustering",
+                    "temp",
+                    "{}.txt".format(sample_name_out_1),
+                ),
+            ],
+            stdout=subprocess.DEVNULL,
+        )
+
+        # compress the output, remove uncompressed output
+        with open(output_path_1.with_suffix(""), "rb") as in_stream:
+            with gzip.open(output_path_1, "wb", comp_lvl) as out_stream:
+                shutil.copyfileobj(in_stream, out_stream)
+        os.remove(output_path_1.with_suffix(""))
+
+        # collect processed and passed reads from the log file
+        with open(
+            Path(project).joinpath(
+                "08_swarm_clustering", "temp", "{}.txt".format(sample_name_out_1)
+            )
+        ) as log_file:
+            content = log_file.read()
+            input_seqs = int(re.findall(r"in (\d+) sequences", content)[0])
+            swarms = int(re.findall(r"Number of swarms:  (\d+)", content)[0])
+            version = re.findall(r"Swarm ([\w.\.]*)", content)[0]
+    else:
+        with gzip.open(output_path_1, "wb"):
+            input_seqs, swarms, version = 0, 0, "empty input"
+
+    # remove swarm output files
+    try:
+        os.remove(
+            Path(project).joinpath(
+                "08_swarm_clustering", "temp", "{}.txt".format(sample_name_out_1)
+            )
+        )
+    except FileNotFoundError:
+        pass
+
+    # give user output
+    print(
+        "{}: {}: Clustered {} input amplicons into {} swarm clusters.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"),
+            Path(file).name,
+            input_seqs,
+            swarms,
+        )
+    )
+
+    # save temporary logs
+    temporary_log = Path(project).joinpath(
+        "08_swarm_clustering",
+        "temp",
+        "{}_log.pkl".format(Path(file).with_suffix("").name),
+    )
+
+    finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
+
+    with open(temporary_log, "wb") as log_file:
+        pickle.dump([Path(file).name, finished, version, input_seqs, swarms], log_file)
+
+    # remove the input file, no longer needed
+    os.remove(file)
+
+
+def chimera_removal(file: str, project=None, comp_lvl=None) -> None:
+    """Function to remove chimeras from swarm clusters with vsearch.
+
+    Args:
+        file (str): Input file to perform chimera filtering.
+        comp_lvl (int, optional): Compression level to use. Defaults to None.
+        project (str, optional): Apscale project to work in. Defaults to None.
+    """
+    input_name = Path(file).with_suffix("").name
+    output_path = Path(project).joinpath(
+        "08_swarm_clustering",
+        "temp",
+        input_name.replace("_with_chimeras", "_no_chimeras"),
+    )
+    output_path_gzipped = str(output_path).replace(".fasta", ".fasta.gz")
+
+    ## run vsearch --uchime_denovo to remove chimeric sequences from the ESVs
+    # perform only if the input file is not empty
+    if not empty_file(file):
+        with open(output_path, "w") as output:
+            f = subprocess.run(
+                [
+                    "vsearch",
+                    "--uchime3_denovo",
+                    Path(file),
+                    "--relabel",
+                    "OTU_",
+                    "--nonchimeras",
+                    "-",
+                    "-fasta_width",
+                    str(0),
+                    "--quiet",
+                    "--sizein",
+                    "--sizeout",
+                ],
+                stdout=output,
+            )
+
+        ## compress the output, remove uncompressed output
+        with open(output_path, "rb") as in_stream:
+            with open(output_path_gzipped, "wb") as out_stream:
+                shutil.copyfileobj(in_stream, out_stream)
+
+        # remove the files including chimeras afterwards
+        os.remove(Path(file))
+        os.remove(output_path)
+    else:
+        with gzip.open(output_path_gzipped, "wb"):
+            os.remove(file)
+
+    # read the base statistics from the log files
+    log_file_name = output_path_gzipped.replace(
+        "_OTUs_no_chimeras.fasta.gz", "_log.pkl"
+    )
+
+    with open(log_file_name, "rb") as log_file:
+        file, finished_clustering, swarm_version, input_amplicons, swarms = pickle.load(
+            log_file
+        )
+
+    # add additional data
+    finished_chimera_removal = "{}".format(
+        datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    )
+    f = subprocess.run(["vsearch", "--version"], capture_output=True)
+    vsearch_version = f.stderr.decode("ascii", errors="ignore")
+    vsearch_version = re.findall("vsearch ([\w\.]*)", vsearch_version)[0]
+
+    print(finished_chimera_removal, vsearch_version)
 
 
 # main function of the swarm clustering script
@@ -35,20 +224,94 @@ def main(project=Path.cwd()):
 
     # only perform clustering if needed
     if perform:
-        # select the correct step tp pick the input files
+        # select the correct step to pick the input files
         prior_step = choose_input(project, "08_swarm_clustering")
 
-        # create temporal output folder
+        # create temporal output folder, override if there is old data
         try:
             os.mkdir(Path(project).joinpath("08_swarm_clustering", "temp"))
         except FileExistsError:
-            pass
+            shutil.rmtree(Path(project).joinpath("08_swarm_clustering", "temp"))
+            os.mkdir(Path(project).joinpath("08_swarm_clustering", "temp"))
 
         # gather input files
         input = glob.glob(str(Path(project).joinpath(prior_step, "data", "*.fasta.gz")))
 
         # since swarm does not work with gzipped data, unzip files first
+        Parallel(n_jobs=cores)(delayed(unzip_inputs)(file, project) for file in input)
 
+        # collect the new input for swarm clustering
+        input = glob.glob(
+            str(Path(project).joinpath("08_swarm_clustering", "temp", "*.fasta"))
+        )
+        # decide wether to perform just swarm clustering, or chimera removal has to be performed as well
+        # if data has been denoised before, only swarm clustering has to be performed
+        if prior_step == "07_denoising":
+            # parallelize the clustering
+            Parallel(n_jobs=cores)(
+                delayed(swarm_clustering)(
+                    file, project, comp_lvl=comp_lvl, prior_step=prior_step
+                )
+                for file in input
+            )
+
+            # write the project report, remove temporary files
+            summary_logs = glob.glob(
+                str(Path(project).joinpath("08_swarm_clustering", "temp", "*_log.pkl"))
+            )
+            summary = [pickle.load(open(line, "rb")) for line in summary_logs]
+
+            log_df = pd.DataFrame(
+                summary,
+                columns=[
+                    "File",
+                    "finished at",
+                    "program version",
+                    "unique sequence input",
+                    "swarms",
+                ],
+            )
+            log_df = log_df.sort_values(by="File")
+            log_df.to_excel(
+                Path(project).joinpath(
+                    "08_swarm_clustering", "Logfile_08_swarm_clustering.xlsx"
+                ),
+                index=False,
+                sheet_name="08_swarm_clustering",
+            )
+
+            ## add log to the project report
+            with pd.ExcelWriter(
+                Path(project).joinpath(
+                    "Project_report_{}.xlsx".format(
+                        Path(project).name.replace("_apscale", "")
+                    )
+                ),
+                mode="a",
+                if_sheet_exists="replace",
+                engine="openpyxl",
+            ) as writer:
+                log_df.to_excel(writer, sheet_name="08_swarm_clustering", index=False)
+
+            ## remove temporary files
+            shutil.rmtree(Path(project).joinpath("08_swarm_clustering", "temp"))
+        # else apscale has to perform swarm clustering, chimera removal and calculate the hash values and name the samples accordingly
+        else:
+            # parallelize the clustering
+            Parallel(n_jobs=cores)(
+                delayed(swarm_clustering)(
+                    file, project, comp_lvl=comp_lvl, prior_step=prior_step
+                )
+                for file in input
+            )
+            # gather files for chimera removal
+            input_files = glob.glob(
+                str(Path(project).joinpath("08_swarm_clustering", "temp", "*.fasta.gz"))
+            )
+
+            # perform chimera removal
+            for file in input_files:
+                chimera_removal(file, project=project, comp_lvl=comp_lvl)
     else:
         ## give user output
         print(

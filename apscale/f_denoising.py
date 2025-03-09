@@ -29,7 +29,7 @@ def get_total_abundance(file_path: str) -> tuple:
 
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize
 def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
-    """Function to apply denoisind to a given gzipped file. Outputs a fasta file with all
+    """Function to apply denoising to a given gzipped file. Outputs a fasta file with all
     centroid sequences."""
     ## define the name for the output fasta
     ## create an output path to write to
@@ -345,7 +345,7 @@ def main(project=Path.cwd()):
             )
         )
 
-        # parallelize the has value calculation
+        # parallelize the hash value calculation
         Parallel(n_jobs=cores)(
             delayed(calculate_hash_headers)(file, project=project, comp_lvl=comp_lvl)
             for file, _ in input
