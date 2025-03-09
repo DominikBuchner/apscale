@@ -7,6 +7,7 @@ from apscale import (
     e_dereplication,
     f_denoising,
     g_swarm_clustering,
+    h_replicate_merging,
 )
 
 
@@ -102,6 +103,15 @@ def main():
         help="Run the swarm clustering module.",
     )
 
+    modules.add_argument(
+        "--replicate_merging",
+        metavar="PATH",
+        nargs="?",
+        const=False,
+        default=argparse.SUPPRESS,
+        help="Run the replicate merging module.",
+    )
+
     ## parse command line arguments
     args = parser.parse_args()
 
@@ -117,6 +127,7 @@ def main():
             e_dereplication.main()
             f_denoising.main()
             g_swarm_clustering.main()
+            h_replicate_merging.main()
         else:
             b_pe_merging.main(args.run_apscale)
             c_primer_trimming.main(args.run_apscale)
@@ -124,6 +135,7 @@ def main():
             e_dereplication.main(args.run_apscale)
             f_denoising.main(args.run_apscale)
             g_swarm_clustering.main(args.run_apscale)
+            h_replicate_merging.main(args.run_apscale)
 
     ## check if a module was called, then check if an additional argument was called
     if "pe_merging" in args:
@@ -166,6 +178,13 @@ def main():
             g_swarm_clustering.main()
         else:
             g_swarm_clustering.main(args.swarm_clustering)
+
+    ## check if a module was called, then check if an additional argument was called
+    if "replicate_merging" in args:
+        if not args.replicate_merging:
+            h_replicate_merging.main()
+        else:
+            h_replicate_merging.main(args.replicate_merging)
 
     ## print help if no argument is provided
     if len(sys.argv) == 1:
