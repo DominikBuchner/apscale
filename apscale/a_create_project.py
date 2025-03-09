@@ -111,7 +111,7 @@ def create_project(project_name):
         df_10 = pd.DataFrame(
             [["True", "NC_"]],
             columns=[
-                "perform nc substration",
+                "perform nc removal",
                 "negative control prefix",
             ],
         )
@@ -164,3 +164,31 @@ def empty_file(file_path: str) -> bool:
             return True
         else:
             return False
+
+
+# function to decide which input to use for the optional steps
+def choose_input(project: str) -> str:
+    """Function to choose the correct input for the optional steps.
+
+    Args:
+        project_path (str): Path to the apscale project
+
+    Returns:
+        str: Processing step to select the files from [e.g. 06_dereplication, 07_denoising, 08_swarm_clustering, 09_replicate_merging, 10_nc_removal]
+    """
+    settings_sheets = {
+        "07_denoising": "perform denoising",
+        "08_swarm_clustering": "perform swarm clustering",
+        "09_replicate_merging": "perform replicate merging",
+        "10_nc_removal": "perform nc removal",
+    }
+
+    settings_decisions = []
+    settings_path = Path(project).joinpath(
+        "Settings_{}.xlsx".format(Path(project).name.replace("_apscale ", ""))
+    )
+
+    for sheet in settings_sheets:
+        settings = pd.read_excel(settings_path, sheet_name=sheet)
+        perform_step = settings[settings_sheets[sheet]].item()
+        settings_decisions.append(settings_decisions)

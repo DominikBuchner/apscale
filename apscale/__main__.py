@@ -6,8 +6,7 @@ from apscale import (
     d_quality_filtering,
     e_dereplication,
     f_denoising,
-    g_generate_esv_table,
-    h_merge_replicates_remove_negative_controls,
+    g_swarm_clustering,
 )
 
 
@@ -93,21 +92,14 @@ def main():
         default=argparse.SUPPRESS,
         help="Run the denoising module.",
     )
+
     modules.add_argument(
-        "--generate_esv_table",
+        "--swarm_clustering",
         metavar="PATH",
         nargs="?",
         const=False,
         default=argparse.SUPPRESS,
-        help="Run the ESV table generation module.",
-    )
-    modules.add_argument(
-        "--merge_replicates_remove_negative_controls",
-        metavar="PATH",
-        nargs="?",
-        const=False,
-        default=argparse.SUPPRESS,
-        help="Merge replicates and / or remove negative controls from the dataset.",
+        help="Run the swarm clustering module.",
     )
 
     ## parse command line arguments
@@ -124,16 +116,14 @@ def main():
             d_quality_filtering.main()
             e_dereplication.main()
             f_denoising.main()
-            g_generate_esv_table.main()
-            h_merge_replicates_remove_negative_controls.main()
+            g_swarm_clustering.main()
         else:
             b_pe_merging.main(args.run_apscale)
             c_primer_trimming.main(args.run_apscale)
             d_quality_filtering.main(args.run_apscale)
             e_dereplication.main(args.run_apscale)
             f_denoising.main(args.run_apscale)
-            g_generate_esv_table.main(args.run_apscale)
-            h_merge_replicates_remove_negative_controls.main(args.run_apscale)
+            g_swarm_clustering.main(args.run_apscale)
 
     ## check if a module was called, then check if an additional argument was called
     if "pe_merging" in args:
@@ -170,17 +160,12 @@ def main():
         else:
             f_denoising.main(args.denoising)
 
-    if "generate_esv_table" in args:
-        if not args.generate_esv_table:
-            g_generate_esv_table.main()
+    ## check if a module was called, then check if an additional argument was called
+    if "swarm_clustering" in args:
+        if not args.denoising:
+            g_swarm_clustering.main()
         else:
-            g_generate_esv_table.main(args.generate_esv_table)
-
-    if "merge_replicates_remove_negative_controls" in args:
-        if not args.merge_replicates_remove_negative_controls:
-            h_merge_replicates_remove_negative_controls.main()
-        else:
-            h_merge_replicates_remove_negative_controls.main(args.merge_replicates_remove_negative_controls)
+            g_swarm_clustering.main(args.swarm_clustering)
 
     ## print help if no argument is provided
     if len(sys.argv) == 1:
