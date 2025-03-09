@@ -1,6 +1,7 @@
-import datetime, os, glob, gzip, shutil, subprocess, re, pickle
+import datetime, os, glob, gzip, shutil, subprocess, re, pickle, hashlib
 import pandas as pd
 from pathlib import Path
+from Bio.SeqIO.FastaIO import SimpleFastaParser
 from joblib import Parallel, delayed
 from apscale.a_create_project import choose_input, empty_file
 
@@ -162,14 +163,14 @@ def chimera_removal(file: str, project=None, comp_lvl=None) -> None:
 
         ## compress the output, remove uncompressed output
         with open(output_path, "rb") as in_stream:
-            with open(output_path_gzipped, "wb") as out_stream:
+            with gzip.open(output_path_gzipped, "wb", comp_lvl) as out_stream:
                 shutil.copyfileobj(in_stream, out_stream)
 
         # remove the files including chimeras afterwards
         os.remove(Path(file))
         os.remove(output_path)
     else:
-        with gzip.open(output_path_gzipped, "wb"):
+        with gzip.open(output_path_gzipped, "wb", comp_lvl):
             os.remove(file)
 
     # read the base statistics from the log files
@@ -182,6 +183,20 @@ def chimera_removal(file: str, project=None, comp_lvl=None) -> None:
             log_file
         )
 
+    # write the correct output file name to the log here
+    # remove all possible appendices to generate the correct output name
+    appendices = [
+        "_PE_trimmed_filtered_dereplicated",
+        "_trimmed_filtered_dereplicated",
+        "_filtered_dereplicated",
+        "_dereplicated",
+    ]
+
+    for apx in appendices:
+        if apx in file:
+            file = "{}.gz".format(file.replace(apx, ""))
+            break
+
     # add additional data
     finished_chimera_removal = "{}".format(
         datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
@@ -190,7 +205,89 @@ def chimera_removal(file: str, project=None, comp_lvl=None) -> None:
     vsearch_version = f.stderr.decode("ascii", errors="ignore")
     vsearch_version = re.findall("vsearch ([\w\.]*)", vsearch_version)[0]
 
-    print(finished_chimera_removal, vsearch_version)
+    # collect the remaining sequences from the fasta
+    fasta_length = len(list(SimpleFastaParser(gzip.open(output_path_gzipped, "rt"))))
+
+    # give user output
+    chimeras_removed = swarms - fasta_length
+
+    # give user output
+    print(
+        "{}: {}: Removed {} chimeric sequences.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"),
+            Path(file).name,
+            chimeras_removed,
+        )
+    )
+
+    # update the log files
+    with open(log_file_name, "wb") as log_file:
+        pickle.dump(
+            [
+                file,
+                finished_clustering,
+                swarm_version,
+                input_amplicons,
+                swarms,
+                finished_chimera_removal,
+                vsearch_version,
+                chimeras_removed,
+            ],
+            log_file,
+        )
+
+
+def calculate_hash_headers(file, project=None, comp_lvl=None):
+    """Function to transform sequence headers to sha3 256 hashes to easily compare centroid sequences.
+
+    Args:
+        file (str): File to hash.
+        project (str, optional): Project to work in. Defaults to None.
+        comp_lvl (int, optional): Compression level to use. Defaults to None.
+    """
+    input_file_name = Path(file).with_suffix("").with_suffix("").name
+
+    # remove all possible appendices to generate the correct output name
+    appendices = [
+        "_PE_trimmed_filtered_dereplicated_OTUs_no_chimeras",
+        "_trimmed_filtered_dereplicated_OTUs_no_chimeras",
+        "_filtered_dereplicated_OTUs_no_chimeras",
+        "_dereplicated_OTUs_no_chimeras",
+    ]
+
+    for apx in appendices:
+        if apx in input_file_name:
+            output_file_name = "{}.fasta.gz".format(input_file_name.replace(apx, ""))
+            break
+
+    # generate output path
+    output_path = Path(project).joinpath(
+        "08_swarm_clustering", "data", output_file_name
+    )
+
+    # read in the data from the fasta
+    fasta_data = SimpleFastaParser(gzip.open(Path(file), "rt"))
+
+    # write the output
+    with gzip.open(output_path, "wt", compresslevel=comp_lvl) as out_stream:
+        for header, seq in fasta_data:
+            seq = seq.upper()
+            # parse size annotation from fasta header
+            size = header.split(";")[-1]
+            header = seq.encode("ascii")
+            header = hashlib.sha3_256(header).hexdigest()
+            out_stream.write(">{};{}\n{}\n".format(header, size, seq))
+
+    # remove the temporary input
+    os.remove(Path(file))
+
+    # give user output
+    print(
+        "{}: {}: Successfully clustered and hashed.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"),
+            input_file_name,
+        )
+    )
 
 
 # main function of the swarm clustering script
@@ -309,9 +406,69 @@ def main(project=Path.cwd()):
                 str(Path(project).joinpath("08_swarm_clustering", "temp", "*.fasta.gz"))
             )
 
-            # perform chimera removal
-            for file in input_files:
-                chimera_removal(file, project=project, comp_lvl=comp_lvl)
+            # perform chimera removal parallelized
+            Parallel(n_jobs=cores)(
+                delayed(chimera_removal)(file, project=project, comp_lvl=comp_lvl)
+                for file in input_files
+            )
+
+            # gather the input files after chimera removal
+            input_files = glob.glob(
+                str(Path(project).joinpath("08_swarm_clustering", "temp", "*.fasta.gz"))
+            )
+
+            # calculate the hash headers
+            Parallel(n_jobs=cores)(
+                delayed(calculate_hash_headers)(
+                    file, project=project, comp_lvl=comp_lvl
+                )
+                for file in input_files
+            )
+
+            # write the project report, remove temporary files
+            summary_logs = glob.glob(
+                str(Path(project).joinpath("08_swarm_clustering", "temp", "*_log.pkl"))
+            )
+            summary = [pickle.load(open(line, "rb")) for line in summary_logs]
+
+            log_df = pd.DataFrame(
+                summary,
+                columns=[
+                    "File",
+                    "finished at",
+                    "swarm version",
+                    "unique sequence input",
+                    "swarms",
+                    "finished chimera removal at",
+                    "vsearch version",
+                    "chimeras removed",
+                ],
+            )
+            log_df = log_df.sort_values(by="File")
+            log_df.to_excel(
+                Path(project).joinpath(
+                    "08_swarm_clustering", "Logfile_08_swarm_clustering.xlsx"
+                ),
+                index=False,
+                sheet_name="08_swarm_clustering",
+            )
+
+            ## add log to the project report
+            with pd.ExcelWriter(
+                Path(project).joinpath(
+                    "Project_report_{}.xlsx".format(
+                        Path(project).name.replace("_apscale", "")
+                    )
+                ),
+                mode="a",
+                if_sheet_exists="replace",
+                engine="openpyxl",
+            ) as writer:
+                log_df.to_excel(writer, sheet_name="08_swarm_clustering", index=False)
+
+            ## remove temporary files
+            shutil.rmtree(Path(project).joinpath("08_swarm_clustering", "temp"))
+
     else:
         ## give user output
         print(
