@@ -162,7 +162,7 @@ def main():
 
     ## check if a module was called, then check if an additional argument was called
     if "swarm_clustering" in args:
-        if not args.denoising:
+        if not args.swarm_clustering:
             g_swarm_clustering.main()
         else:
             g_swarm_clustering.main(args.swarm_clustering)

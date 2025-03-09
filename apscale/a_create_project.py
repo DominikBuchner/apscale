@@ -167,11 +167,12 @@ def empty_file(file_path: str) -> bool:
 
 
 # function to decide which input to use for the optional steps
-def choose_input(project: str) -> str:
+def choose_input(project: str, current_step: str) -> str:
     """Function to choose the correct input for the optional steps.
 
     Args:
         project_path (str): Path to the apscale project
+        current_step (str): Step that is currently performed
 
     Returns:
         str: Processing step to select the files from [e.g. 06_dereplication, 07_denoising, 08_swarm_clustering, 09_replicate_merging, 10_nc_removal]
@@ -183,12 +184,39 @@ def choose_input(project: str) -> str:
         "10_nc_removal": "perform nc removal",
     }
 
-    settings_decisions = []
+    settings_decisions = {
+        "06_dereplication": True,
+        "07_denoising": False,
+        "08_swarm_clustering": False,
+        "09_replicate_merging": False,
+        "10_nc_removal": False,
+    }
     settings_path = Path(project).joinpath(
-        "Settings_{}.xlsx".format(Path(project).name.replace("_apscale ", ""))
+        "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
     )
 
+    # collect the settings
     for sheet in settings_sheets:
         settings = pd.read_excel(settings_path, sheet_name=sheet)
         perform_step = settings[settings_sheets[sheet]].item()
-        settings_decisions.append(settings_decisions)
+        settings_decisions[sheet] = perform_step
+
+    # ordered processing steps
+    processing_steps = [
+        "06_dereplication",
+        "07_denoising",
+        "08_swarm_clustering",
+        "09_replicate_merging",
+        "10_nc_removal",
+    ]
+
+    # shorten the processing steps according to the current step
+    if current_step in processing_steps:
+        idx = processing_steps.index(current_step)
+        # collect all processing steps that could have happend before
+        processing_steps = processing_steps[:idx]
+
+    # go through them in reverse order, return the last step that has been performed
+    for step in processing_steps[::-1]:
+        if settings_decisions[step]:
+            return step
