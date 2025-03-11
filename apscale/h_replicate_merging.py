@@ -23,6 +23,8 @@ def merge_replicates(
     """
     pass
 
+    # hashes as keys, dict as values {seq, size, count}
+
 
 def main(project=Path.cwd()):
     """Main function of the script. Default values can be changed via the input file.
@@ -94,7 +96,13 @@ def main(project=Path.cwd()):
 
         # perform the replicate merging
         for matched_files in matches_dict.keys():
-            merge_replicates(matched_files, matches_dict[matched_files], minimum_presence, project, comp_lvl)
+            merge_replicates(
+                matched_files,
+                matches_dict[matched_files],
+                minimum_presence,
+                project,
+                comp_lvl,
+            )
     else:
         ## give user output
         print(
