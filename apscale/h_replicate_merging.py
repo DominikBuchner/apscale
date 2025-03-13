@@ -1,8 +1,9 @@
-import datetime, glob
+import datetime, glob, gzip
 import pandas as pd
 from pathlib import Path
 from collections import defaultdict
 from apscale.a_create_project import choose_input
+from Bio.SeqIO.FastaIO import SimpleFastaParser
 
 
 def merge_replicates(
@@ -21,9 +22,58 @@ def merge_replicates(
         project (str, optional): Apscale project to work in. Defaults to None.
         complevel (str, optional): Compression level to use for the output file. Defaults to None.
     """
-    pass
+    # define the initial dict for storing the data
+    seq_data = {}
+
+    # count total input sequences and reads here
+    total_input_seqs = 0
+    total_input_reads = 0
 
     # hashes as keys, dict as values {seq, size, count}
+    # extract the required data from the input file
+    for input_file in input_files:
+        with gzip.open(input_file, "rt") as in_stream:
+            data = SimpleFastaParser(in_stream)
+            for header, seq in data:
+                # extract the id hash from the header
+                header_data = header.split(";size=")
+                # account for different size annotations from swarm and vsearch
+                hash, size = header_data[0], int(header_data[1].split(";")[0])
+                # add to the dict
+                if hash not in seq_data:
+                    seq_data[hash] = {"seq": seq, "size": size, "count": 1}
+                    total_input_seqs += 1
+                    total_input_reads += size
+                else:
+                    seq_data[hash]["size"] += size
+                    seq_data[hash]["count"] += 1
+                    total_input_reads += size
+
+    # transform to dataframe for easier sorting
+    output_data = pd.DataFrame.from_dict(data=seq_data, orient="index")
+
+    # transform filtering and sorting if there is anything to sort
+    if len(output_data.index) > 0:
+        output_data = output_data.loc[output_data["count"] >= minimum_presence]
+        output_data = output_data.sort_values(by=["size"], ascending=False)
+
+        # get the data back to dict to easily write the output
+        output_data = output_data.to_dict(orient="index")
+
+    # define the output path
+    output_path = Path(project).joinpath("09_replicate_merging", "data", output_name)
+
+    # store the total output seqs and reads here
+    total_output_seqs = 0
+    total_output_reads = 0
+
+    # write the output
+    with gzip.open(output_path, "wt") as out_stream:
+        for hash in output_data:
+            seq, size = output_data[hash]["seq"], output_data[hash]["size"]
+            out_stream.write(f">{hash};size={size}\n{seq}\n")
+            total_output_seqs += 1
+            total_output_reads += size
 
 
 def main(project=Path.cwd()):
@@ -103,6 +153,7 @@ def main(project=Path.cwd()):
                 project,
                 comp_lvl,
             )
+            # break
     else:
         ## give user output
         print(

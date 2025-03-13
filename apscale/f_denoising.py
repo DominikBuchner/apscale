@@ -326,9 +326,9 @@ def main(project=Path.cwd()):
             # set the individual thresholds accordingly
             input = [(file, math.ceil(size * minsize * 0.01)) for file, size in input]
             # make all integers positive since minsize is a positive int
-            input = [(file, size) if size > 0 else (file, 1) for file, size in input]
+            input = [(file, size) if size > 1 else (file, 1) for file, size in input]
         if threshold_type == "absolute":
-            input = ((file, minsize) for file in input)
+            input = [(file, minsize) for file in input]
 
         ## parallelize the denoising
         Parallel(n_jobs=cores)(
