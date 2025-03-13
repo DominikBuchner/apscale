@@ -153,7 +153,6 @@ def main(project=Path.cwd()):
                 project,
                 comp_lvl,
             )
-            # break
     else:
         ## give user output
         print(
