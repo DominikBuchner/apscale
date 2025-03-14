@@ -1,4 +1,4 @@
-import datetime, glob, gzip
+import datetime, glob, gzip, hashlib
 import pandas as pd
 from pathlib import Path
 from collections import defaultdict
@@ -38,7 +38,10 @@ def merge_replicates(
                 # extract the id hash from the header
                 header_data = header.split(";size=")
                 # account for different size annotations from swarm and vsearch
-                hash, size = header_data[0], int(header_data[1].split(";")[0])
+                seq_id, size = header_data[0], int(header_data[1].split(";")[0])
+                # recompute the hash values in case no denoising / clustering is performed
+                seq_for_hashing = seq.upper().encode("ascii")
+                hash = hashlib.sha3_256(seq_for_hashing).hexdigest()
                 # add to the dict
                 if hash not in seq_data:
                     seq_data[hash] = {"seq": seq, "size": size, "count": 1}
@@ -74,6 +77,14 @@ def merge_replicates(
             out_stream.write(f">{hash};size={size}\n{seq}\n")
             total_output_seqs += 1
             total_output_reads += size
+
+    print(
+        output_name,
+        total_input_seqs,
+        total_input_reads,
+        total_output_seqs,
+        total_output_reads,
+    )
 
 
 def main(project=Path.cwd()):
