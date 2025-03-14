@@ -28,7 +28,9 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
 
     ## if anchoring is True change the cutadapt call
     if anchoring:
-        adapter = "^{}...{}".format(p5_primer, str(Seq(p7_primer).reverse_complement()))
+        adapter = "^{}...{}$".format(
+            p5_primer, str(Seq(p7_primer).reverse_complement())
+        )
     else:
         adapter = "{}...{}".format(p5_primer, str(Seq(p7_primer).reverse_complement()))
 
@@ -37,7 +39,7 @@ def primer_trimming(file, project=None, p5_primer=None, p7_primer=None, anchorin
         f = subprocess.run(
             [
                 "cutadapt",
-                "-a",
+                "-g",
                 adapter,
                 "-o",
                 str(output_path),
