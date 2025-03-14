@@ -380,7 +380,7 @@ def main(project=Path.cwd()) -> None:
 
         esv_table, nc_rem_stats = substract_neg_controls(esv_table, nc_prefix)
     else:
-        nc_rem_stats = pd.DataFrame(data=[], columsn=["esv", "substracted reads"])
+        nc_rem_stats = pd.DataFrame(data=[], columns=["esv", "substracted reads"])
 
     # remove empty rows and columns from the esv table
     if replicate_merging or substract_ncs:
