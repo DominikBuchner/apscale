@@ -46,12 +46,8 @@ def get_data_driven_threshold(file_path: str) -> tuple:
     with gzip.open(file_path, "rt") as in_stream:
         for header, seq in SimpleFastaParser(in_stream):
             size = int(header.split("size=")[-1])
-            sequence_abundances.append(size)
-
-    sequence_abundances = sorted(sequence_abundances, reverse=True)
-
-    # remove singletons for computation
-    sequence_abundances = [abd for abd in sequence_abundances if abd > 1]
+            if size > 1:
+                sequence_abundances.append(size)
 
     # return a filter of one for empty files
     if len(sequence_abundances) == 0:
@@ -62,6 +58,7 @@ def get_data_driven_threshold(file_path: str) -> tuple:
 
     # compute the 95% percentile threshold
     threshold = math.ceil(poisson.ppf(0.95, lambda_poisson))
+    print(threshold)
 
     # return the threshold
     return file_path, threshold
