@@ -1,5 +1,8 @@
-import subprocess, datetime, gzip, os, pickle, glob, shutil, re, hashlib, math
+import subprocess, datetime, gzip, os, pickle, glob, shutil, re, hashlib, math, sys
 import pandas as pd
+import numpy as np
+from math import ceil
+from scipy.stats import poisson
 from joblib import Parallel, delayed
 from pathlib import Path
 from Bio.SeqIO.FastaIO import SimpleFastaParser
@@ -25,6 +28,43 @@ def get_total_abundance(file_path: str) -> tuple:
         total_abundance += int(size)
 
     return file_path, total_abundance
+
+
+# function to compute a dynamic data-driven threshold (poisson distribution for error modelling)
+def get_data_driven_threshold(file_path: str) -> tuple:
+    """Function to compute a Poisson-based noise threshold for each fasta file individually.
+
+    Args:
+        file_path (str): Path to the fasta file used for computation.
+
+    Returns:
+        tuple: Tuple with the fasta_path and the threshold to use for denoising.
+    """
+    # gather sequence abundances here
+    sequence_abundances = []
+
+    with gzip.open(file_path, "rt") as in_stream:
+        for header, seq in SimpleFastaParser(in_stream):
+            size = int(header.split("size=")[-1])
+            sequence_abundances.append(size)
+
+    sequence_abundances = sorted(sequence_abundances, reverse=True)
+
+    # remove singletons for computation
+    sequence_abundances = [abd for abd in sequence_abundances if abd > 1]
+
+    # return a filter of one for empty files
+    if len(sequence_abundances) == 0:
+        return (file_path, 1)
+
+    # compute poisson mean
+    lambda_poisson = np.mean(sequence_abundances)
+
+    # compute the 95% percentile threshold
+    threshold = math.ceil(poisson.ppf(0.95, lambda_poisson))
+
+    # return the threshold
+    return file_path, threshold
 
 
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize
@@ -290,6 +330,24 @@ def main(project=Path.cwd()):
         settings["size threshold"].item(),
     )
 
+    # check that the data for data-driven threshold computation is valid
+    if threshold_type == "data-driven":
+        derep_settings = pd.read_excel(
+            Path(project).joinpath(
+                "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+            ),
+            sheet_name="06_dereplication",
+        )
+        derep_min_size = derep_settings["minimum sequence abundance"].item()
+        if derep_min_size > 2:
+            print(
+                "{}: Data driven minsize is only available if dereplication min size is 1 or 2. Please repeat dereplication with a valid value!".format(
+                    datetime.datetime.now().strftime("%H:%M:%S")
+                )
+            )
+
+            sys.exit()
+
     # only perform denoising is set to True:
     if perform:
         ## create temporal output folder
@@ -329,6 +387,10 @@ def main(project=Path.cwd()):
             input = [(file, size) if size > 1 else (file, 1) for file, size in input]
         if threshold_type == "absolute":
             input = [(file, minsize) for file in input]
+        if threshold_type == "data-driven":
+            input = Parallel(n_jobs=cores)(
+                delayed(get_data_driven_threshold)(file) for file in input
+            )
 
         ## parallelize the denoising
         Parallel(n_jobs=cores)(

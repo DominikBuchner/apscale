@@ -60,10 +60,16 @@ def dereplication(file, project=None, comp_lvl=None, minimum_seq_abundance=None)
             )
         ) as log_file:
             content = log_file.read()
-            seqs, unique_seqs = (
-                int(re.findall(r"(\d+) seqs", content)[0]),
-                int(re.findall(r"(\d+) unique sequences", content)[0]),
-            )
+            if minimum_seq_abundance > 1:
+                seqs, unique_seqs = (
+                    int(re.findall(r"(\d+) seqs", content)[0]),
+                    int(re.findall(r"(\d+) uniques written", content)[0]),
+                )
+            else:
+                seqs, unique_seqs = (
+                    int(re.findall(r"(\d+) seqs", content)[0]),
+                    int(re.findall(r"(\d+) unique sequences", content)[0]),
+                )
             version = re.findall("vsearch ([\w\.]*)", content)[0]
     else:
         with gzip.open(output_path, "wb"):
