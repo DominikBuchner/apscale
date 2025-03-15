@@ -58,7 +58,6 @@ def get_data_driven_threshold(file_path: str) -> tuple:
 
     # compute the 95% percentile threshold
     threshold = math.ceil(poisson.ppf(0.95, lambda_poisson))
-    print(threshold)
 
     # return the threshold
     return file_path, threshold
