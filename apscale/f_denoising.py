@@ -335,7 +335,7 @@ def main(project=Path.cwd()):
             sheet_name="06_dereplication",
         )
         derep_min_size = derep_settings["minimum sequence abundance"].item()
-        if derep_min_size > 2:
+        if derep_min_size > 2 and perform == True:
             print(
                 "{}: Data driven minsize is only available if dereplication min size is 1 or 2. Please repeat dereplication with a valid value!".format(
                     datetime.datetime.now().strftime("%H:%M:%S")

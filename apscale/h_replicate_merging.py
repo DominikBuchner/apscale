@@ -1,5 +1,6 @@
 import datetime, glob, gzip, hashlib
 import pandas as pd
+from joblib import Parallel, delayed
 from pathlib import Path
 from collections import defaultdict
 from apscale.a_create_project import choose_input
@@ -78,13 +79,32 @@ def merge_replicates(
             total_output_seqs += 1
             total_output_reads += size
 
+    # give user output
+    # give user output
     print(
+        "{}: {}: Combined {} files with {} input sequences and {} input reads resulting in {} output sequences and {} output reads".format(
+            datetime.datetime.now().strftime("%H:%M:%S"),
+            output_name,
+            len(input_files),
+            total_input_seqs,
+            total_input_reads,
+            total_output_seqs,
+            total_output_reads,
+        )
+    )
+
+    # return log_data
+    finished = "{}".format(datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
+    log_data = [Path(file).stem for file in input_files] + [
         output_name,
+        finished,
         total_input_seqs,
         total_input_reads,
         total_output_seqs,
         total_output_reads,
-    )
+    ]
+
+    return log_data
 
 
 def main(project=Path.cwd()):
@@ -156,14 +176,53 @@ def main(project=Path.cwd()):
         matches_dict = {tuple(value): key for key, value in matches_dict.items()}
 
         # perform the replicate merging
-        for matched_files in matches_dict.keys():
-            merge_replicates(
+        log_data = Parallel(n_jobs=cores)(
+            delayed(merge_replicates)(
                 matched_files,
                 matches_dict[matched_files],
                 minimum_presence,
                 project,
                 comp_lvl,
             )
+            for matched_files in matches_dict.keys()
+        )
+
+        # extract the number of input files for computing the columns
+        nr_of_input_files = len(log_data[0]) - 6
+        columns = [f"input file {i}" for i in range(1, nr_of_input_files + 1)] + [
+            "output file",
+            "finished at",
+            "total input sequences",
+            "total input reads",
+            "total output sequences",
+            "total output reads",
+        ]
+        # put everything in a log dataframe
+        log_df = pd.DataFrame(log_data, columns=columns)
+        log_df = log_df.sort_values(by=["output file"])
+
+        # write the log file
+        log_df.to_excel(
+            Path(project).joinpath(
+                "09_replicate_merging", "Logfile_09_replicate_merging.xlsx"
+            ),
+            index=False,
+            sheet_name="09_replicate_merging",
+        )
+
+        ## add log to the project report
+        with pd.ExcelWriter(
+            Path(project).joinpath(
+                "Project_report_{}.xlsx".format(
+                    Path(project).name.replace("_apscale", "")
+                )
+            ),
+            mode="a",
+            if_sheet_exists="replace",
+            engine="openpyxl",
+        ) as writer:
+            log_df.to_excel(writer, sheet_name="09_replicate_merging", index=False)
+
     else:
         ## give user output
         print(
