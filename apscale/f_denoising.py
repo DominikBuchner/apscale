@@ -30,12 +30,48 @@ def get_total_abundance(file_path: str) -> tuple:
     return file_path, total_abundance
 
 
+# function to compute a dynamic cumulative threshold (cumulate reads until cutoff is met, exclude singletons)
+def get_cumulative_threshold(file_path: str, threshold: int) -> tuple:
+    """Function to compute a cumulative threshold for each fasta file.
+    E.g. Threshold % of that total read abundance is above. Singletons are excluded for this computation, since they are most likely errors anyways.
+    """
+    # gather sequence abundances here
+    sequence_abundances = []
+
+    # remove singletons before setting a threshold
+    with gzip.open(file_path, "rt") as in_stream:
+        for header, seq in SimpleFastaParser(in_stream):
+            size = int(header.split("size=")[-1])
+            if size > 1:
+                sequence_abundances.append(size)
+
+    # return a filter of one for empty files
+    if len(sequence_abundances) == 0:
+        return (file_path, 1)
+
+    # compute the total abundance * threshold
+    abundance_threshold = (threshold / 100) * sum(sequence_abundances)
+
+    abundance_sum = 0
+    final_threshold = 0
+
+    # determine the rank
+    for rank, abd in enumerate(sequence_abundances):
+        abundance_sum += abd
+        if abundance_sum > abundance_threshold:
+            final_threshold = sequence_abundances[rank]
+            break
+
+    return file_path, final_threshold
+
+
 # function to compute a dynamic data-driven threshold (poisson distribution for error modelling)
-def get_data_driven_threshold(file_path: str) -> tuple:
+def get_data_driven_threshold(file_path: str, threshold: int) -> tuple:
     """Function to compute a Poisson-based noise threshold for each fasta file individually.
 
     Args:
         file_path (str): Path to the fasta file used for computation.
+        threshold (int): Threshold to cut off the distribution in %
 
     Returns:
         tuple: Tuple with the fasta_path and the threshold to use for denoising.
@@ -43,6 +79,7 @@ def get_data_driven_threshold(file_path: str) -> tuple:
     # gather sequence abundances here
     sequence_abundances = []
 
+    # remove singletons before setting a threshold
     with gzip.open(file_path, "rt") as in_stream:
         for header, seq in SimpleFastaParser(in_stream):
             size = int(header.split("size=")[-1])
@@ -57,7 +94,7 @@ def get_data_driven_threshold(file_path: str) -> tuple:
     lambda_poisson = np.mean(sequence_abundances)
 
     # compute the 95% percentile threshold
-    threshold = math.ceil(poisson.ppf(0.95, lambda_poisson))
+    threshold = math.ceil(poisson.ppf(threshold / 100, lambda_poisson))
 
     # return the threshold
     return file_path, threshold
@@ -319,15 +356,15 @@ def main(project=Path.cwd()):
         ),
         sheet_name="07_denoising",
     )
-    perform, alpha, threshold_type, minsize = (
+    perform, alpha, threshold_type, threshold = (
         settings["perform denoising"].item(),
         settings["alpha"].item(),
         settings["threshold type"].item(),
-        settings["size threshold"].item(),
+        settings["size threshold [absolute nr / %]"].item(),
     )
 
-    # check that the data for data-driven threshold computation is valid
-    if threshold_type == "data-driven":
+    # check that the data for data-driven or cumulative threshold computation is valid
+    if threshold_type == "data-driven" or threshold_type == "cumulative":
         derep_settings = pd.read_excel(
             Path(project).joinpath(
                 "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
@@ -378,14 +415,18 @@ def main(project=Path.cwd()):
             )
 
             # set the individual thresholds accordingly
-            input = [(file, math.ceil(size * minsize * 0.01)) for file, size in input]
+            input = [(file, math.ceil(size * threshold * 0.01)) for file, size in input]
             # make all integers positive since minsize is a positive int
             input = [(file, size) if size > 1 else (file, 1) for file, size in input]
         if threshold_type == "absolute":
-            input = [(file, minsize) for file in input]
+            input = [(file, threshold) for file in input]
         if threshold_type == "data-driven":
             input = Parallel(n_jobs=cores)(
-                delayed(get_data_driven_threshold)(file) for file in input
+                delayed(get_data_driven_threshold)(file, threshold) for file in input
+            )
+        if threshold_type == "cumulative":
+            input = Parallel(n_jobs=cores)(
+                delayed(get_cumulative_threshold)(file, threshold) for file in input
             )
 
         ## parallelize the denoising

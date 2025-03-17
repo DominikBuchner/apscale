@@ -82,7 +82,12 @@ def create_project(project_name):
         ## write the 07_denoising sheet
         df_7 = pd.DataFrame(
             [["True", 2, "absolute", 4]],
-            columns=["perform denoising", "alpha", "threshold type", "size threshold"],
+            columns=[
+                "perform denoising",
+                "alpha",
+                "threshold type",
+                "size threshold [absolute nr / %]",
+            ],
         )
 
         df_7.to_excel(writer, sheet_name="07_denoising", index=False)
