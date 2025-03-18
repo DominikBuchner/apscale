@@ -59,7 +59,8 @@ def get_cumulative_threshold(file_path: str, threshold: int) -> tuple:
     for rank, abd in enumerate(sequence_abundances):
         abundance_sum += abd
         if abundance_sum > abundance_threshold:
-            final_threshold = sequence_abundances[rank]
+            # substract 1 to really have 90% of the data
+            final_threshold = sequence_abundances[rank] - 1
             break
 
     return file_path, final_threshold
