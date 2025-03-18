@@ -8,6 +8,7 @@ from apscale import (
     f_denoising,
     g_swarm_clustering,
     h_replicate_merging,
+    i_nc_removal,
 )
 
 
@@ -112,6 +113,15 @@ def main():
         help="Run the replicate merging module.",
     )
 
+    modules.add_argument(
+        "--nc_removal",
+        metavar="PATH",
+        nargs="?",
+        const=False,
+        default=argparse.SUPPRESS,
+        help="Run the negative control removal module.",
+    )
+
     ## parse command line arguments
     args = parser.parse_args()
 
@@ -128,6 +138,7 @@ def main():
             f_denoising.main()
             g_swarm_clustering.main()
             h_replicate_merging.main()
+            i_nc_removal.main()
         else:
             b_pe_merging.main(args.run_apscale)
             c_primer_trimming.main(args.run_apscale)
@@ -136,6 +147,7 @@ def main():
             f_denoising.main(args.run_apscale)
             g_swarm_clustering.main(args.run_apscale)
             h_replicate_merging.main(args.run_apscale)
+            i_nc_removal.main(args.run_apscale)
 
     ## check if a module was called, then check if an additional argument was called
     if "pe_merging" in args:
@@ -185,6 +197,13 @@ def main():
             h_replicate_merging.main()
         else:
             h_replicate_merging.main(args.replicate_merging)
+
+    ## check if a module was called, then check if an additional argument was called
+    if "nc_removal" in args:
+        if not args.nc_removal:
+            i_nc_removal.main()
+        else:
+            i_nc_removal.main(args.nc_removal)
 
     ## print help if no argument is provided
     if len(sys.argv) == 1:

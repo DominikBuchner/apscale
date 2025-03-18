@@ -66,8 +66,8 @@ def get_cumulative_threshold(file_path: str, threshold: int) -> tuple:
     return file_path, final_threshold
 
 
-# function to compute a dynamic data-driven threshold (poisson distribution for error modelling)
-def get_data_driven_threshold(file_path: str, threshold: int) -> tuple:
+# function to compute a dynamic poisson derived threshold (poisson distribution for error modelling)
+def get_poisson_threshold(file_path: str, threshold: int) -> tuple:
     """Function to compute a Poisson-based noise threshold for each fasta file individually.
 
     Args:
@@ -364,8 +364,8 @@ def main(project=Path.cwd()):
         settings["size threshold [absolute nr / %]"].item(),
     )
 
-    # check that the data for data-driven or cumulative threshold computation is valid
-    if threshold_type == "data-driven" or threshold_type == "cumulative":
+    # check that the data for poisson or cumulative threshold computation is valid
+    if threshold_type == "poisson" or threshold_type == "cumulative":
         derep_settings = pd.read_excel(
             Path(project).joinpath(
                 "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
@@ -421,9 +421,9 @@ def main(project=Path.cwd()):
             input = [(file, size) if size > 1 else (file, 1) for file, size in input]
         if threshold_type == "absolute":
             input = [(file, threshold) for file in input]
-        if threshold_type == "data-driven":
+        if threshold_type == "poisson":
             input = Parallel(n_jobs=cores)(
-                delayed(get_data_driven_threshold)(file, threshold) for file in input
+                delayed(get_poisson_threshold)(file, threshold) for file in input
             )
         if threshold_type == "cumulative":
             input = Parallel(n_jobs=cores)(
