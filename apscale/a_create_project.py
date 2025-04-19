@@ -125,12 +125,11 @@ def create_project(project_name):
 
         ## write the 11 read table sheet
         df_11 = pd.DataFrame(
-            [["True", "False", "True", 100]],
+            [["True", "False", "True"]],
             columns=[
                 "generate read table",
                 "to excel",
                 "to_parquet",
-                "sequence identity for grouping",
             ],
         )
 
