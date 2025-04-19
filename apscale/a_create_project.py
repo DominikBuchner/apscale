@@ -129,7 +129,7 @@ def create_project(project_name):
             columns=[
                 "generate read table",
                 "to excel",
-                "to_parquet",
+                "to parquet",
             ],
         )
 

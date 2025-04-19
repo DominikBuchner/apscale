@@ -82,7 +82,7 @@ def swarm_clustering(file, project=None, comp_lvl=None, prior_step=None):
             content = log_file.read()
             input_seqs = int(re.findall(r"in (\d+) sequences", content)[0])
             swarms = int(re.findall(r"Number of swarms:  (\d+)", content)[0])
-            version = re.findall(r"Swarm ([\w.\.]*)", content)[0]
+            version = re.findall(r"Swarm ([\\w.\.]*)", content)[0]
     else:
         with gzip.open(output_path_1, "wb"):
             input_seqs, swarms, version = 0, 0, "empty input"

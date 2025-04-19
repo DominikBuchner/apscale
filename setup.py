@@ -18,7 +18,7 @@ setuptools.setup(
         "openpyxl >= 3.0.10",
         "psutil >= 5.8.0",
         "pandas >= 1.5.0",
-        "demultiplexer2 >= 1.1.1",
+        "demultiplexer2 >= 1.1.5",
         "joblib >= 1.0.0",
         "biopython >= 1.78",
         "cutadapt >= 3.5",

@@ -124,7 +124,7 @@ def main():
     )
     
     modules.add_argument(
-        "----generate_read_table",
+        "--generate_read_table",
         metavar="PATH",
         nargs="?",
         const=False,
