@@ -9,6 +9,7 @@ from apscale import (
     g_swarm_clustering,
     h_replicate_merging,
     i_nc_removal,
+    j_generate_read_table
 )
 
 
@@ -121,6 +122,15 @@ def main():
         default=argparse.SUPPRESS,
         help="Run the negative control removal module.",
     )
+    
+    modules.add_argument(
+        "----generate_read_table",
+        metavar="PATH",
+        nargs="?",
+        const=False,
+        default=argparse.SUPPRESS,
+        help="Run the read table generation module.",
+    )
 
     ## parse command line arguments
     args = parser.parse_args()
@@ -139,6 +149,7 @@ def main():
             g_swarm_clustering.main()
             h_replicate_merging.main()
             i_nc_removal.main()
+            j_generate_read_table.main()
         else:
             b_pe_merging.main(args.run_apscale)
             c_primer_trimming.main(args.run_apscale)
@@ -148,6 +159,7 @@ def main():
             g_swarm_clustering.main(args.run_apscale)
             h_replicate_merging.main(args.run_apscale)
             i_nc_removal.main(args.run_apscale)
+            j_generate_read_table.main(args.run_apscale)
 
     ## check if a module was called, then check if an additional argument was called
     if "pe_merging" in args:
@@ -204,6 +216,12 @@ def main():
             i_nc_removal.main()
         else:
             i_nc_removal.main(args.nc_removal)
+            
+    if "generate_read_table" in args:
+        if not args.generate_read_table:
+            j_generate_read_table.main()
+        else:
+            j_generate_read_table.main(args.generate_read_table)
 
     ## print help if no argument is provided
     if len(sys.argv) == 1:
