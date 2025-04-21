@@ -76,12 +76,12 @@ def substract_nc_reads(
                     if new_size > 0:
                         # write output
                         removed_reads += nc_reads[hash]
-                        out_stream.write(f"{hash};size={new_size}\n{seq}")
+                        out_stream.write(f">{hash};size={new_size}\n{seq}\n")
                     else:
                         removed_reads += size
                 else:
                     # just write
-                    out_stream.write(f"{hash};size={size}\n{seq}")
+                    out_stream.write(f">{hash};size={size}\n{seq}\n")
 
         ## give user output
         print(
