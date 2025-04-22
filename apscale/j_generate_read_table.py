@@ -57,6 +57,20 @@ def save_data_lines_to_hdf(save_path: str, data_lines: dict) -> dict:
 
     Returns: Returns an empty dict to free memory space
     """
+    # convert the data liens dict to dataframe
+    data_lines = pd.DataFrame.from_dict(
+        data_lines, orient="index", columns=["hash_idx", "sample_idx", "read_count"]
+    )
+
+    # write the data to hdf format
+    with pd.HDFStore(
+        save_path, mode="a", complib="blosc:blosclz", complevel=9
+    ) as hdf_output:
+        hdf_output.append(
+            key="read_count_data", value=data_lines, format="table", data_columns=True
+        )
+
+    return {}
 
 
 def index_data_to_hdf(project: str, input_files: str, buffer_size: int) -> str:
@@ -94,12 +108,13 @@ def index_data_to_hdf(project: str, input_files: str, buffer_size: int) -> str:
     # spill over to hdf if too full, no lookups needed
     full_data = {}
 
-    # define the hdf savepath
+    # define the hdf savepath, remove data from previous run to not append to it
     hdf_savename = Path(project).joinpath(
         "11_read_table",
         "data",
         "read_data_storage_{}.h5.lz".format(Path(project).stem.replace("_apscale", "")),
     )
+    os.remove(hdf_savename)
 
     # loop over all input files
     for file in input_files:
@@ -126,10 +141,12 @@ def index_data_to_hdf(project: str, input_files: str, buffer_size: int) -> str:
                 # add data to the hdf store
                 save_data_lines_to_hdf(hdf_savename, full_data)
                 full_data = {}
-    print(full_data)
+    else:
+        save_data_lines_to_hdf(hdf_savename, full_data)
 
     # save the buffered dicts to the hdf store in chunks
 
+    # return to hdf savename for reuse / ordering / reading
     return hdf_savename
 
 
