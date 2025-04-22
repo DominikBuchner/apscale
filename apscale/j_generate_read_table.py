@@ -1,11 +1,11 @@
-import zarr, glob, gzip, pickle, shutil, dask, datetime, sys, os
+import glob, gzip, pickle, shutil, dask, datetime, os
 import dask.dataframe as dd
 from zict import File, Buffer, LRU, Func
 from pathlib import Path
 from Bio.SeqIO.FastaIO import SimpleFastaParser
-import numpy as np
 import pandas as pd
 from apscale.a_create_project import choose_input
+from more_itertools import chunked
 
 
 def parse_fasta_data(input_path: str):
@@ -73,6 +73,57 @@ def save_data_lines_to_hdf(save_path: str, data_lines: dict) -> dict:
     return {}
 
 
+def add_dicts_to_hdf(
+    save_path: str,
+    seq_hash_to_idx: dict,
+    seq_hash_to_seq: dict,
+    sample_to_idx: dict,
+    buffer_size: int,
+) -> None:
+    """Function to add the idx dictionarys to the hdf store.
+
+    Args:
+        save_path (str): Path to save the hdf to.
+        seq_hash_to_idx (dict): Dict that maps hash values to idx values
+        seq_hash_to_seq (dict): Dict that maps hash values to sequences
+        sample_to_idx (dict): Dict that maps sample names to idx values
+        buffer_size (int): Buffer size to use to loop over the dictionarys when writing to hdf
+    """
+    # loop over the chunks of seq hash to idx to push to hdf
+    for chunk in chunked(seq_hash_to_idx.items(), buffer_size):
+        chunk_df = pd.DataFrame(data=chunk, columns=["hash", "hash_idx"]).set_index(
+            "hash_idx"
+        )
+        chunk_df["seq"] = chunk_df["hash"].map(seq_hash_to_seq)
+
+        # write the chunk to the hdf store
+        with pd.HDFStore(
+            save_path, mode="a", complib="blosc:blosclz", complevel=9
+        ) as hdf_output:
+            hdf_output.append(
+                key="sequence_data",
+                value=chunk_df,
+                format="table",
+                data_columns=True,
+            )
+
+    for chunk in chunked(sample_to_idx.items(), buffer_size):
+        chunk_df = pd.DataFrame(
+            data=chunk, columns=["sample_name", "sample_idx"]
+        ).set_index("sample_idx")
+
+        # write the chunk to the hdf store
+        with pd.HDFStore(
+            save_path, mode="a", complib="blosc:blosclz", complevel=9
+        ) as hdf_output:
+            hdf_output.append(
+                key="sample_data",
+                value=chunk_df,
+                format="table",
+                data_columns=True,
+            )
+
+
 def index_data_to_hdf(project: str, input_files: str, buffer_size: int) -> str:
     """Function to index the dataset with buffered dicts and saving all data as dataframes to hdf.
 
@@ -114,7 +165,11 @@ def index_data_to_hdf(project: str, input_files: str, buffer_size: int) -> str:
         "data",
         "read_data_storage_{}.h5.lz".format(Path(project).stem.replace("_apscale", "")),
     )
-    os.remove(hdf_savename)
+
+    try:
+        os.remove(hdf_savename)
+    except FileNotFoundError:
+        pass
 
     # loop over all input files
     for file in input_files:
@@ -144,7 +199,10 @@ def index_data_to_hdf(project: str, input_files: str, buffer_size: int) -> str:
     else:
         save_data_lines_to_hdf(hdf_savename, full_data)
 
-    # save the buffered dicts to the hdf store in chunks
+    # add the buffered dicts to hdf
+    add_dicts_to_hdf(
+        hdf_savename, seq_hash_to_idx, seq_hash_to_seq, sample_to_idx, buffer_size
+    )
 
     # return to hdf savename for reuse / ordering / reading
     return hdf_savename
@@ -156,6 +214,7 @@ def main(project=Path.cwd()):
     Args:
         project (str, optional): Path to the apscale project to work in. Defaults to Path.cwd().
     """
+
     # collect the settings from the excel sheet
     settings = pd.read_excel(
         Path(project).joinpath(
