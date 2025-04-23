@@ -1,4 +1,4 @@
-import glob, gzip, pickle, shutil, dask, datetime, os
+import glob, gzip, pickle, shutil, datetime, os, sys
 import dask.dataframe as dd
 from zict import File, Buffer, LRU, Func
 from pathlib import Path
@@ -90,16 +90,15 @@ def add_dicts_to_hdf(
         buffer_size (int): Buffer size to use to loop over the dictionarys when writing to hdf
     """
     # loop over the chunks of seq hash to idx to push to hdf
-    for chunk in chunked(seq_hash_to_idx.items(), buffer_size):
-        chunk_df = pd.DataFrame(data=chunk, columns=["hash", "hash_idx"]).set_index(
-            "hash_idx"
-        )
-        chunk_df["seq"] = chunk_df["hash"].map(seq_hash_to_seq)
-
-        # write the chunk to the hdf store
-        with pd.HDFStore(
-            save_path, mode="a", complib="blosc:blosclz", complevel=9
-        ) as hdf_output:
+    # write the chunk to the hdf store
+    with pd.HDFStore(
+        save_path, mode="a", complib="blosc:blosclz", complevel=9
+    ) as hdf_output:
+        for chunk in chunked(seq_hash_to_idx.items(), buffer_size):
+            chunk_df = pd.DataFrame(data=chunk, columns=["hash", "hash_idx"]).set_index(
+                "hash_idx"
+            )
+            chunk_df["seq"] = chunk_df["hash"].map(seq_hash_to_seq)
             hdf_output.append(
                 key="sequence_data",
                 value=chunk_df,
@@ -107,15 +106,14 @@ def add_dicts_to_hdf(
                 data_columns=True,
             )
 
-    for chunk in chunked(sample_to_idx.items(), buffer_size):
-        chunk_df = pd.DataFrame(
-            data=chunk, columns=["sample_name", "sample_idx"]
-        ).set_index("sample_idx")
-
-        # write the chunk to the hdf store
-        with pd.HDFStore(
-            save_path, mode="a", complib="blosc:blosclz", complevel=9
-        ) as hdf_output:
+    # write the chunk to the hdf store
+    with pd.HDFStore(
+        save_path, mode="a", complib="blosc:blosclz", complevel=9
+    ) as hdf_output:
+        for chunk in chunked(sample_to_idx.items(), buffer_size):
+            chunk_df = pd.DataFrame(
+                data=chunk, columns=["sample_name", "sample_idx"]
+            ).set_index("sample_idx")
             hdf_output.append(
                 key="sample_data",
                 value=chunk_df,
@@ -204,8 +202,54 @@ def index_data_to_hdf(project: str, input_files: str, buffer_size: int) -> str:
         hdf_savename, seq_hash_to_idx, seq_hash_to_seq, sample_to_idx, buffer_size
     )
 
+    # remove temporary savefiles
+    shutil.rmtree(Path(project).joinpath("11_read_table", "temp"))
+
     # return to hdf savename for reuse / ordering / reading
     return hdf_savename
+
+
+def generate_fasta(project: str, hdf_savename: str) -> None:
+    """Function to generate an ordered fasta file that holds all sequences of the dataset.
+
+    Args:
+        project (str): Apscale project to work in.
+        hdf_savename (str): Path to the hdf file that holds the data.
+    """
+    read_count_data = dd.read_hdf(
+        hdf_savename,
+        key="read_count_data",
+        columns=["hash_idx", "read_count"],
+    )
+
+    # groupby hash_idx to order by abundance
+    read_count_data = read_count_data.groupby(by=["hash_idx"]).sum().reset_index()
+
+    # load the sequence data to generate the fasta file
+    sequence_data = dd.read_hdf(
+        hdf_savename,
+        key="sequence_data",
+    ).reset_index()
+
+    # merge on hash idx
+    fasta_data = dd.merge(read_count_data, sequence_data, on="hash_idx")
+
+    # sort the values by read count
+    fasta_data = fasta_data.sort_values(by=["read_count"], ascending=False)
+
+    # generate a savename for the fasta file
+    fasta_savename = Path(project).joinpath(
+        "11_read_table",
+        "sequences_{}.fasta".format(Path(project).stem.replace("_apscale", "")),
+    )
+
+    # open the fasta file to write to
+    with open(fasta_savename, "w") as out_stream:
+        # write the fasta data
+        for part in fasta_data.to_delayed():
+            part = part.compute()
+            for hash, seq in zip(part["hash"], part["seq"]):
+                out_stream.write(f">{hash}\n{seq}\n")
 
 
 def main(project=Path.cwd()):
@@ -241,7 +285,9 @@ def main(project=Path.cwd()):
 
     # collect the input for read table generation
     # generate a data folder to save the hdf store
-    input = glob.glob(str(Path(project).joinpath(prior_step, "data", "*.fasta.gz")))
+    input_files = glob.glob(
+        str(Path(project).joinpath(prior_step, "data", "*.fasta.gz"))
+    )
 
     # generate a temp folder for saving the buffered dicts
     ## create temporal output folder
@@ -251,12 +297,27 @@ def main(project=Path.cwd()):
         except FileExistsError:
             pass
 
+    print(
+        "{}: Building data storage.".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
+
     # index all the data and save as hdf store
-    hdf_savename = index_data_to_hdf(project, input, 100_000)
+    hdf_savename = index_data_to_hdf(project, input_files, 100_000)
+
+    print(
+        "{}: Saving sequences to fasta.".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
 
     # sort the hdf store to generate the fasta file, generate the fasta file
+    generate_fasta(project, hdf_savename)
 
     # create parquet and excel outputs from the hdf
-
-    # remove temporary savefiles
-    shutil.rmtree(Path(project).joinpath("11_read_table", "temp"))
+    print(
+        "{}: Generating read table(s).".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
