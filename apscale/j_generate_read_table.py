@@ -254,7 +254,7 @@ def main(project=Path.cwd()):
     # index all the data and save as hdf store
     hdf_savename = index_data_to_hdf(project, input, 100_000)
 
-    # sort the hdf store to generate the fasta file
+    # sort the hdf store to generate the fasta file, generate the fasta file
 
     # create parquet and excel outputs from the hdf
 
