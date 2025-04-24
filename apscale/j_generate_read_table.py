@@ -295,13 +295,13 @@ def generate_read_table(
 
         ## collect the sample data in chunks
         sample_data = dd.read_hdf(
-            hdf_savename, key="sample_data", chunksize=chunksize
+            hdf_savename, key="sample_data", chunksize=2
         ).reset_index()
 
         read_count_data = dd.read_hdf(hdf_savename, key="read_count_data")
 
         # load the data in chunks
-        for part in sample_data.to_delayed():
+        for part_nr, part in enumerate(sample_data.to_delayed()):
             # load the part to dask dataframe
             part_df = dd.from_delayed(part)
 
@@ -344,7 +344,7 @@ def generate_read_table(
                 columns=["order", "hash_idx"]
             )
 
-            wide_read_table.to_excel("test.xlsx")
+            # save to excel or parquet
 
 
 def main(project=Path.cwd()):
