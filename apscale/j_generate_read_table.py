@@ -282,7 +282,7 @@ def generate_read_table(
     for format, setting in zip(formats, (to_excel, to_parquet)):
         # nothing to do if the setting is set to false
         if setting == False:
-            break
+            continue
         else:
             # compute the batch size for the respective format
             if format == "excel":
@@ -295,31 +295,38 @@ def generate_read_table(
 
         ## collect the sample data in chunks
         sample_data = dd.read_hdf(
-            hdf_savename, key="sample_data", chunksize=2
+            hdf_savename, key="sample_data", chunksize=chunksize
         ).reset_index()
 
         read_count_data = dd.read_hdf(hdf_savename, key="read_count_data")
 
         # load the data in chunks
         for part_nr, part in enumerate(sample_data.to_delayed()):
-            # load the part to dask dataframe
-            part_df = dd.from_delayed(part)
+            # load the part to dask dataframe and compute it
+            part_df = dd.from_delayed(part).compute()
 
-            # filter out the relevant read counts
+            # create a cross product with current samples and all sequences
+            sample_sequence_matrix = pd.merge(
+                part_df[["sample_idx", "sample_name"]], all_sequence_data, how="cross"
+            )
+
+            # fetch the read counts for the current part
             read_counts_part = read_count_data[
                 read_count_data["sample_idx"].isin(part_df["sample_idx"])
-            ]
+            ].compute()
 
-            # merge with samples and sequence info
-            read_counts_part = read_counts_part.merge(
-                part_df, on="sample_idx", how="left"
+            # merge the read counts into the sample sequence matrix
+            sample_sequence_matrix = sample_sequence_matrix.merge(
+                read_counts_part, on=["sample_idx", "hash_idx"], how="left"
             )
-            read_counts_part = read_counts_part.merge(
-                all_sequence_data, on="hash_idx", how="right"
-            )
+
+            # fill the missing values with 0
+            sample_sequence_matrix["read_count"] = sample_sequence_matrix[
+                "read_count"
+            ].fillna(0)
 
             # pivot the table to create a classic samples x sequences OTU table
-            wide_read_table = read_counts_part.compute().pivot_table(
+            wide_read_table = sample_sequence_matrix.pivot_table(
                 index=["hash_idx", "hash", "seq"],
                 columns="sample_name",
                 values="read_count",
@@ -345,6 +352,27 @@ def generate_read_table(
             )
 
             # save to excel or parquet
+            if format == "excel" and setting:
+                savename = Path(project).joinpath(
+                    "11_read_table",
+                    "{}_read_table_part_{}.xlsx".format(
+                        Path(project).stem.replace("_apscale", ""), part_nr
+                    ),
+                )
+
+                # save to excel
+                wide_read_table.to_excel(savename, index=False)
+
+            if format == "parquet" and setting:
+                savename = Path(project).joinpath(
+                    "11_read_table",
+                    "{}_read_table_part_{}.parquet.snappy".format(
+                        Path(project).stem.replace("_apscale", ""), part_nr
+                    ),
+                )
+
+                # save to excel
+                wide_read_table.to_parquet(savename, index=False)
 
 
 def main(project=Path.cwd()):
