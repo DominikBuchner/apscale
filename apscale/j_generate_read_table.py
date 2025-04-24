@@ -209,17 +209,19 @@ def index_data_to_hdf(project: str, input_files: str, buffer_size: int) -> str:
     return hdf_savename
 
 
-def generate_fasta(project: str, hdf_savename: str) -> None:
+def generate_fasta(project: str, hdf_savename: str, chunksize: int) -> None:
     """Function to generate an ordered fasta file that holds all sequences of the dataset.
 
     Args:
         project (str): Apscale project to work in.
         hdf_savename (str): Path to the hdf file that holds the data.
+        chunksize(int): Chunksize to use for saving memory
     """
     read_count_data = dd.read_hdf(
         hdf_savename,
         key="read_count_data",
         columns=["hash_idx", "read_count"],
+        chunksize=chunksize,
     )
 
     # groupby hash_idx to order by abundance
@@ -227,8 +229,7 @@ def generate_fasta(project: str, hdf_savename: str) -> None:
 
     # load the sequence data to generate the fasta file
     sequence_data = dd.read_hdf(
-        hdf_savename,
-        key="sequence_data",
+        hdf_savename, key="sequence_data", chunksize=chunksize
     ).reset_index()
 
     # merge on hash idx
@@ -250,6 +251,100 @@ def generate_fasta(project: str, hdf_savename: str) -> None:
             part = part.compute()
             for hash, seq in zip(part["hash"], part["seq"]):
                 out_stream.write(f">{hash}\n{seq}\n")
+
+    return fasta_data
+
+
+def generate_read_table(
+    project: str,
+    hdf_savename: str,
+    to_excel: bool,
+    to_parquet: bool,
+    fasta_data: object,
+) -> None:
+    """Function to generate and save read tables to excel and or parquet
+
+    Args:
+        project (str): Apscale project to work in.
+        hdf_savename (str): Path to the hdf storage that holds all data.
+        to_excel (bool): Wether or not to write to excel.
+        to_parquet (bool): Wether or not to write to parquet.
+        fasta_data (object): fasta data as dask dataframe. holds the sequence data in correct order, so can be used for read_table_generation
+    """
+    formats = ["excel", "parquet"]
+
+    # collect number of sequences and number of samples
+    with pd.HDFStore(hdf_savename, mode="r") as store:
+        number_of_sequences = store.get_storer("sequence_data").nrows
+        number_of_samples = store.get_storer("sample_data").nrows
+
+    # loop over both possbilities
+    for format, setting in zip(formats, (to_excel, to_parquet)):
+        # nothing to do if the setting is set to false
+        if setting == False:
+            break
+        else:
+            # compute the batch size for the respective format
+            if format == "excel":
+                chunksize = 10_000_000 // number_of_sequences
+            if format == "parquet":
+                chunksize = 100_000_000 // number_of_sequences
+
+        # collect all hashes and sequences
+        all_sequence_data = fasta_data.compute()[["hash_idx", "hash", "seq"]]
+
+        ## collect the sample data in chunks
+        sample_data = dd.read_hdf(
+            hdf_savename, key="sample_data", chunksize=chunksize
+        ).reset_index()
+
+        read_count_data = dd.read_hdf(hdf_savename, key="read_count_data")
+
+        # load the data in chunks
+        for part in sample_data.to_delayed():
+            # load the part to dask dataframe
+            part_df = dd.from_delayed(part)
+
+            # filter out the relevant read counts
+            read_counts_part = read_count_data[
+                read_count_data["sample_idx"].isin(part_df["sample_idx"])
+            ]
+
+            # merge with samples and sequence info
+            read_counts_part = read_counts_part.merge(
+                part_df, on="sample_idx", how="left"
+            )
+            read_counts_part = read_counts_part.merge(
+                all_sequence_data, on="hash_idx", how="right"
+            )
+
+            # pivot the table to create a classic samples x sequences OTU table
+            wide_read_table = read_counts_part.compute().pivot_table(
+                index=["hash_idx", "hash", "seq"],
+                columns="sample_name",
+                values="read_count",
+                fill_value=0,
+            )
+
+            # flatten column index, reset index for saving
+            wide_read_table.columns.name = None
+            wide_read_table = wide_read_table.reset_index()
+
+            # sort the dataframe by the order in fasta data
+            fasta_order = all_sequence_data[["hash_idx"]].reset_index(drop=True)
+            fasta_order["order"] = range(len(fasta_order))
+
+            # merge to the wide read_table for ordering
+            wide_read_table = wide_read_table.merge(
+                fasta_order, on="hash_idx", how="left"
+            )
+
+            # sort and drop the sorting column
+            wide_read_table = wide_read_table.sort_values("order").drop(
+                columns=["order", "hash_idx"]
+            )
+
+            wide_read_table.to_excel("test.xlsx")
 
 
 def main(project=Path.cwd()):
@@ -313,7 +408,9 @@ def main(project=Path.cwd()):
     )
 
     # sort the hdf store to generate the fasta file, generate the fasta file
-    generate_fasta(project, hdf_savename)
+    fasta_data = generate_fasta(project, hdf_savename, 100_000)
+
+    fasta_data = fasta_data.repartition(npartitions=5)
 
     # create parquet and excel outputs from the hdf
     print(
@@ -321,3 +418,6 @@ def main(project=Path.cwd()):
             datetime.datetime.now().strftime("%H:%M:%S")
         )
     )
+
+    # generate the read tables
+    generate_read_table(project, hdf_savename, to_excel, to_parquet, fasta_data)
