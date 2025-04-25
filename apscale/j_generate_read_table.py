@@ -278,6 +278,14 @@ def generate_read_table(
         number_of_sequences = store.get_storer("sequence_data").nrows
         number_of_samples = store.get_storer("sample_data").nrows
 
+    print(
+        "{}: Dataset contains {} unique sequences and {} samples.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"),
+            number_of_sequences,
+            number_of_samples,
+        )
+    )
+
     # loop over both possbilities
     for format, setting in zip(formats, (to_excel, to_parquet)):
         # nothing to do if the setting is set to false
