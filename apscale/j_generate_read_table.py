@@ -446,8 +446,6 @@ def main(project=Path.cwd()):
     # sort the hdf store to generate the fasta file, generate the fasta file
     fasta_data = generate_fasta(project, hdf_savename, 100_000)
 
-    fasta_data = fasta_data.repartition(npartitions=5)
-
     # create parquet and excel outputs from the hdf
     print(
         "{}: Generating read table(s).".format(

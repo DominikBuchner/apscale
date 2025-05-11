@@ -75,7 +75,7 @@ def create_project(project_name):
         df_5.to_excel(writer, sheet_name="05_quality_filtering", index=False)
 
         ## write the 06_dereplication sheet
-        df_6 = pd.DataFrame([[3]], columns=["minimum sequence abundance"])
+        df_6 = pd.DataFrame([[1]], columns=["minimum sequence abundance"])
 
         df_6.to_excel(writer, sheet_name="06_dereplication", index=False)
 
