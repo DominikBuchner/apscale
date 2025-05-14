@@ -94,7 +94,7 @@ def create_project(project_name):
 
         ## write the 08_swarm clustering sheet
         df_8 = pd.DataFrame(
-            [["True"]],
+            [["False"]],
             columns=["perform swarm clustering"],
         )
 
