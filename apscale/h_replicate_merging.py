@@ -82,7 +82,7 @@ def merge_replicates(
     # give user output
     # give user output
     print(
-        "{}: {}: Combined {} files with {} input sequences and {} input reads resulting in {} output sequences and {} output reads".format(
+        "{}: {}: Combined {} files with {} input sequences and {} input reads resulting in {} output sequences and {} output reads.".format(
             datetime.datetime.now().strftime("%H:%M:%S"),
             output_name,
             len(input_files),

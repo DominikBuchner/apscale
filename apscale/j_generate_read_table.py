@@ -1,4 +1,4 @@
-import glob, gzip, pickle, shutil, datetime, os, sys
+import glob, gzip, pickle, shutil, datetime, os
 import dask.dataframe as dd
 from zict import File, Buffer, LRU, Func
 from pathlib import Path
@@ -21,6 +21,10 @@ def parse_fasta_data(input_path: str):
     """
     # extract the sample name
     sample_name = Path(input_path).with_suffix("").with_suffix("").name
+
+    # always yield one empty dummy sequence as first object so empty files are not missing from the read table
+    yield sample_name, "empty_seq", "empty_seq", 0
+
     # extract the data directly from the fasta itself
     with gzip.open(input_path, "rt") as data_stream:
         for header, seq in SimpleFastaParser(data_stream):
@@ -250,7 +254,9 @@ def generate_fasta(project: str, hdf_savename: str, chunksize: int) -> None:
         for part in fasta_data.to_delayed():
             part = part.compute()
             for hash, seq in zip(part["hash"], part["seq"]):
-                out_stream.write(f">{hash}\n{seq}\n")
+                # skip the empty seq
+                if hash != "empty_seq":
+                    out_stream.write(f">{hash}\n{seq}\n")
 
     return fasta_data
 
@@ -278,10 +284,11 @@ def generate_read_table(
         number_of_sequences = store.get_storer("sequence_data").nrows
         number_of_samples = store.get_storer("sample_data").nrows
 
+    # give user output, ignore the empty seq
     print(
         "{}: Dataset contains {} unique sequences and {} samples.".format(
             datetime.datetime.now().strftime("%H:%M:%S"),
-            number_of_sequences,
+            number_of_sequences - 1,
             number_of_samples,
         )
     )
@@ -358,6 +365,9 @@ def generate_read_table(
             wide_read_table = wide_read_table.sort_values("order").drop(
                 columns=["order", "hash_idx"]
             )
+
+            # drop the last row as it contains the empty seq
+            wide_read_table = wide_read_table.head(-1)
 
             # save to excel or parquet
             if format == "excel" and setting:
