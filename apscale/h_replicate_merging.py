@@ -1,4 +1,4 @@
-import datetime, glob, gzip, hashlib
+import datetime, glob, gzip, hashlib, sys, shutil, os, glob
 import pandas as pd
 from joblib import Parallel, delayed
 from pathlib import Path
@@ -10,6 +10,7 @@ from Bio.SeqIO.FastaIO import SimpleFastaParser
 def merge_replicates(
     input_files: tuple,
     output_name: str,
+    current_step: int,
     minimum_presence: int,
     project=None,
     complevel=None,
@@ -19,6 +20,7 @@ def merge_replicates(
     Args:
         input_files (tuple): Tuple holding up to n input files.
         output_name (str): Name of the output file to write.
+        current_step (int): Current replicate merging step.
         minimum_presence (int): Sequences have to be present in at least "minimum_presence" replicates.
         project (str, optional): Apscale project to work in. Defaults to None.
         complevel (str, optional): Compression level to use for the output file. Defaults to None.
@@ -65,7 +67,9 @@ def merge_replicates(
         output_data = output_data.to_dict(orient="index")
 
     # define the output path
-    output_path = Path(project).joinpath("09_replicate_merging", "data", output_name)
+    output_path = Path(project).joinpath(
+        "09_replicate_merging", f"step_{current_step + 1}", output_name
+    )
 
     # store the total output seqs and reads here
     total_output_seqs = 0
@@ -132,101 +136,165 @@ def main(project=Path.cwd()):
         ),
         sheet_name="09_replicate_merging",
     )
-    perform = settings["perform replicate merging"].item()
-    replicate_del = settings["replicate delimiter"].item()
-    minimum_presence = settings["minimum replicate presence"].item()
 
-    # only perform replicate merging if requested
-    if perform:
-        # select the correct step to pick the input files
-        prior_step = choose_input(project, "09_replicate_merging")
+    # check how many replicate merging steps need to be performed
+    nr_of_steps = len(settings.index)
 
-        # gather input files
-        input = glob.glob(str(Path(project).joinpath(prior_step, "data", "*.fasta.gz")))
+    #  remove old data folders if neccessary
+    for folder in Path(project).joinpath("09_replicate_merging").glob("*"):
+        if "step_" in str(folder) and folder.is_dir():
+            shutil.rmtree(folder)
 
-        # put a mapping here in case no clustering or denoising is performed --> files have to be renamed accordingly then
-        temporary_mapping = [[file_path, file_path] for file_path in input]
+    # generate a step folder for each of the steps.
+    for idx, _ in enumerate(range(nr_of_steps), start=1):
+        step_folder_path = Path(project).joinpath("09_replicate_merging", f"step_{idx}")
+        os.mkdir(step_folder_path)
 
-        # filter out appendices from previous steps
-        appendices = [
-            "_PE_trimmed_filtered_dereplicated",
-            "_trimmed_filtered_dereplicated",
-            "_filtered_dereplicated",
-            "_dereplicated",
-        ]
+    # collect the settings for all steps, perform replicate merging n times
+    for step_nr in range(nr_of_steps):
+        step_settings = settings.iloc[step_nr, :]
+        perform = step_settings["perform replicate merging"]
+        replicate_del = step_settings["replicate delimiter"]
+        minimum_presence = step_settings["minimum replicate presence"]
 
-        for pair in temporary_mapping:
-            for apx in appendices:
-                if apx in pair[0]:
-                    pair[0] = "{}.gz".format(pair[0].replace(apx, ""))
-                    break
-
-        # # generate a defaultdict that maps output_names to input pairs, triplets, etc, depending on the number of replicates
-        matches_dict = defaultdict(list)
-
-        # # find matching replicates
-        for output_name, file_path in temporary_mapping:
-            common_name = "_".join(Path(output_name).name.split("_")[:-1])
-            common_name = f"{common_name}.fasta.gz"
-            matches_dict[common_name].append(file_path)
-
-        matches_dict = dict(matches_dict)
-
-        # switch keys and values to have direct input for replicate merging
-        matches_dict = {tuple(value): key for key, value in matches_dict.items()}
-
-        # perform the replicate merging
-        log_data = Parallel(n_jobs=cores)(
-            delayed(merge_replicates)(
-                matched_files,
-                matches_dict[matched_files],
-                minimum_presence,
-                project,
-                comp_lvl,
-            )
-            for matched_files in matches_dict.keys()
-        )
-
-        # extract the number of input files for computing the columns
-        nr_of_input_files = len(log_data[0]) - 6
-        columns = [f"input file {i}" for i in range(1, nr_of_input_files + 1)] + [
-            "output file",
-            "finished at",
-            "total input sequences",
-            "total input reads",
-            "total output sequences",
-            "total output reads",
-        ]
-        # put everything in a log dataframe
-        log_df = pd.DataFrame(log_data, columns=columns)
-        log_df = log_df.sort_values(by=["output file"])
-
-        # write the log file
-        log_df.to_excel(
-            Path(project).joinpath(
-                "09_replicate_merging", "Logfile_09_replicate_merging.xlsx"
-            ),
-            index=False,
-            sheet_name="09_replicate_merging",
-        )
-
-        ## add log to the project report
-        with pd.ExcelWriter(
-            Path(project).joinpath(
-                "Project_report_{}.xlsx".format(
-                    Path(project).name.replace("_apscale", "")
+        # only perform replicate merging if requested
+        if perform:
+            # select the correct step to pick the input files, depending on nr of steps
+            if step_nr == 0:
+                prior_step = choose_input(project, "09_replicate_merging")
+            else:
+                prior_step = Path(project).joinpath(
+                    "09_replicate_merging", f"step_{step_nr}"
                 )
-            ),
-            mode="a",
-            if_sheet_exists="replace",
-            engine="openpyxl",
-        ) as writer:
-            log_df.to_excel(writer, sheet_name="09_replicate_merging", index=False)
 
-    else:
-        ## give user output
-        print(
-            "{}: Replicate merging is disabled. Skipping step.".format(
-                datetime.datetime.now().strftime("%H:%M:%S")
+            # remove old analysis results to make sure all data is replaced
+            for file in (
+                Path(project).joinpath("09_replicate_merging", "data").glob("*")
+            ):
+                file.unlink()
+
+            # gather input files. If first processing step gather from data, otherwise from processing step before
+            if step_nr == 0:
+                input = glob.glob(
+                    str(Path(project).joinpath(prior_step, "data", "*.fasta.gz"))
+                )
+            else:
+                input = glob.glob(
+                    str(
+                        Path(project).joinpath(
+                            "09_replicate_merging", f"step_{step_nr}", "*.fasta.gz"
+                        )
+                    )
+                )
+
+            # put a mapping here in case no clustering or denoising is performed --> files have to be renamed accordingly then
+            temporary_mapping = [[file_path, file_path] for file_path in input]
+
+            # filter out appendices from previous steps
+            appendices = [
+                "_PE_trimmed_filtered_dereplicated",
+                "_trimmed_filtered_dereplicated",
+                "_filtered_dereplicated",
+                "_dereplicated",
+            ]
+
+            for pair in temporary_mapping:
+                for apx in appendices:
+                    if apx in pair[0]:
+                        pair[0] = "{}.gz".format(pair[0].replace(apx, ""))
+                        break
+
+            # # generate a defaultdict that maps output_names to input pairs, triplets, etc, depending on the number of replicates
+            matches_dict = defaultdict(list)
+
+            # # find matching replicates
+            for output_name, file_path in temporary_mapping:
+                common_name = "_".join(Path(output_name).name.split(replicate_del)[:-1])
+                common_name = f"{common_name}.fasta.gz"
+                matches_dict[common_name].append(file_path)
+
+            matches_dict = dict(matches_dict)
+
+            # switch keys and values to have direct input for replicate merging
+            matches_dict = {tuple(value): key for key, value in matches_dict.items()}
+
+            # perform the replicate merging
+            log_data = Parallel(n_jobs=cores)(
+                delayed(merge_replicates)(
+                    matched_files,
+                    matches_dict[matched_files],
+                    step_nr,
+                    minimum_presence,
+                    project,
+                    comp_lvl,
+                )
+                for matched_files in matches_dict.keys()
             )
-        )
+
+            # extract the number of input files for computing the columns
+            nr_of_input_files = len(log_data[0]) - 6
+
+            columns = [f"input file {i}" for i in range(1, nr_of_input_files + 1)] + [
+                "output file",
+                "finished at",
+                "total input sequences",
+                "total input reads",
+                "total output sequences",
+                "total output reads",
+            ]
+
+            # put everything in a log dataframe
+            log_df = pd.DataFrame(log_data, columns=columns)
+            log_df = log_df.sort_values(by=["output file"])
+
+            # write the log file
+            log_df.to_excel(
+                Path(project).joinpath(
+                    "09_replicate_merging",
+                    f"Logfile_09_replicate_merging_step_{step_nr + 1}.xlsx",
+                ),
+                index=False,
+                sheet_name=f"09_replicate_merging_step_{step_nr + 1}",
+            )
+
+            ## add log to the project report
+            with pd.ExcelWriter(
+                Path(project).joinpath(
+                    "Project_report_{}.xlsx".format(
+                        Path(project).name.replace("_apscale", "")
+                    )
+                ),
+                mode="a",
+                if_sheet_exists="replace",
+                engine="openpyxl",
+            ) as writer:
+                log_df.to_excel(
+                    writer,
+                    sheet_name=f"09_replicate_merging_step_{step_nr + 1}",
+                    index=False,
+                )
+
+            # finally, if all steps have been performed, copy all files from last step to data to continue processing
+            if step_nr + 1 == nr_of_steps:
+                # gather files from the last processing step
+                last_processed_files = glob.glob(
+                    str(
+                        Path(project).joinpath(
+                            "09_replicate_merging", f"step_{step_nr+1}", "*.fasta.gz"
+                        )
+                    )
+                )
+
+                target_directory = Path(project).joinpath(
+                    "09_replicate_merging", "data"
+                )
+
+                for processed_file in last_processed_files:
+                    shutil.copy(processed_file, target_directory)
+        else:
+            ## give user output
+            print(
+                "{}: Replicate merging is disabled. Skipping step.".format(
+                    datetime.datetime.now().strftime("%H:%M:%S")
+                )
+            )

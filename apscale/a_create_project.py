@@ -201,7 +201,7 @@ def choose_input(project: str, current_step: str) -> str:
 
     # collect the settings
     for sheet in settings_sheets:
-        settings = pd.read_excel(settings_path, sheet_name=sheet)
+        settings = pd.read_excel(settings_path, sheet_name=sheet).iloc[0, :]
         perform_step = settings[settings_sheets[sheet]].item()
         settings_decisions[sheet] = perform_step
 

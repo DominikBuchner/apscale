@@ -331,6 +331,10 @@ def main(project=Path.cwd()):
             shutil.rmtree(Path(project).joinpath("08_swarm_clustering", "temp"))
             os.mkdir(Path(project).joinpath("08_swarm_clustering", "temp"))
 
+        # remove old analysis results to make sure all data is replaced
+        for file in Path(project).joinpath("08_swarm_clustering", "data").glob("*"):
+            file.unlink()
+
         # gather input files
         input = glob.glob(str(Path(project).joinpath(prior_step, "data", "*.fasta.gz")))
 

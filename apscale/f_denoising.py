@@ -390,6 +390,10 @@ def main(project=Path.cwd()):
         except FileExistsError:
             pass
 
+        # remove old analysis results to make sure all data is replaced
+        for file in Path(project).joinpath("07_denoising", "data").glob("*"):
+            file.unlink()
+
         ## give user output
         print(
             "{}: Starting individual denoising and chimera removal.".format(
