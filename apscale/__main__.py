@@ -1,4 +1,5 @@
-import argparse, sys
+import argparse, sys, subprocess
+from pathlib import Path
 from apscale import (
     a_create_project,
     b_pe_merging,
@@ -9,7 +10,8 @@ from apscale import (
     g_swarm_clustering,
     h_replicate_merging,
     i_nc_removal,
-    j_generate_read_table
+    j_generate_read_table,
+    k_analyze,
 )
 
 
@@ -122,7 +124,7 @@ def main():
         default=argparse.SUPPRESS,
         help="Run the negative control removal module.",
     )
-    
+
     modules.add_argument(
         "--generate_read_table",
         metavar="PATH",
@@ -130,6 +132,15 @@ def main():
         const=False,
         default=argparse.SUPPRESS,
         help="Run the read table generation module.",
+    )
+
+    modules.add_argument(
+        "--analyze",
+        metavar="PATH",
+        nargs="?",
+        const=False,
+        default=argparse.SUPPRESS,
+        help="Run the analysis module",
     )
 
     ## parse command line arguments
@@ -216,12 +227,23 @@ def main():
             i_nc_removal.main()
         else:
             i_nc_removal.main(args.nc_removal)
-            
+
     if "generate_read_table" in args:
         if not args.generate_read_table:
             j_generate_read_table.main()
         else:
             j_generate_read_table.main(args.generate_read_table)
+
+    if "analyze" in args:
+        if not args.analyze:
+            subprocess.run(
+                "streamlit run C:\\Users\\Dominik\\Dokumente\\apscale\\apscale\\k_analyze.py"
+            )
+        else:
+            path = Path(args.analyze)
+            subprocess.run(
+                f'streamlit run C:\\Users\\Dominik\\Dokumente\\apscale\\apscale\\k_analyze.py -- "{path}"'
+            )
 
     ## print help if no argument is provided
     if len(sys.argv) == 1:
