@@ -2,6 +2,7 @@ import argparse, sys, subprocess
 from pathlib import Path
 from apscale import (
     a_create_project,
+    Apscale_analyze,
     b_pe_merging,
     c_primer_trimming,
     d_quality_filtering,
@@ -11,7 +12,6 @@ from apscale import (
     h_replicate_merging,
     i_nc_removal,
     j_generate_read_table,
-    k_analyze,
 )
 
 
@@ -237,12 +237,12 @@ def main():
     if "analyze" in args:
         if not args.analyze:
             subprocess.run(
-                "streamlit run C:\\Users\\Dominik\\Dokumente\\apscale\\apscale\\k_analyze.py"
+                "streamlit run C:\\Users\\Dominik\\Dokumente\\apscale\\apscale\\Apscale_analyze.py"
             )
         else:
             path = Path(args.analyze)
             subprocess.run(
-                f'streamlit run C:\\Users\\Dominik\\Dokumente\\apscale\\apscale\\k_analyze.py -- "{path}"'
+                f'streamlit run C:\\Users\\Dominik\\Dokumente\\apscale\\apscale\\Apscale_analyze.py -- "{path}"'
             )
 
     ## print help if no argument is provided
