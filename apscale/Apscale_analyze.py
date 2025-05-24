@@ -30,7 +30,11 @@ def main(project=Path.cwd()):
     )
 
     st.write(
-        "This module can be used to add metadata to your read storage and export read tables."
+        "This module can be used to **add metadata** to your read storage and **export read tables**."
+    )
+
+    st.write(
+        "This module will grow over time with additional functions we consider useful for metabarcoding analysis."
     )
 
 
