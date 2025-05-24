@@ -70,7 +70,7 @@ def dereplication(file, project=None, comp_lvl=None, minimum_seq_abundance=None)
                     int(re.findall(r"(\d+) seqs", content)[0]),
                     int(re.findall(r"(\d+) unique sequences", content)[0]),
                 )
-            version = re.findall("vsearch ([\w\.]*)", content)[0]
+            version = re.findall(r"vsearch ([\w\.]*)", content)[0]
     else:
         with gzip.open(output_path, "wb"):
             seqs, unique_seqs, version = 0, 0, "empty input"

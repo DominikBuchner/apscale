@@ -177,7 +177,7 @@ def denoise(file, project=None, comp_lvl=None, alpha=None, minsize=None):
             except IndexError:
                 f = subprocess.run(["vsearch", "--version"], capture_output=True)
                 version = f.stderr.decode("ascii", errors="ignore")
-                version = re.findall("vsearch ([\w\.]*)", version)[0]
+                version = re.findall(r"vsearch ([\w\.]*)", version)[0]
     else:
         with gzip.open(output_path_1, "wb"):
             seqs, discarded, esvs, version = 0, 0, 0, "empty input"

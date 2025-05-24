@@ -12,6 +12,10 @@ def main(project=Path.cwd()):
     except IndexError:
         project = project
 
+    # add the project to the session state so it can be accessed on other pages
+    if "project" not in st.session_state:
+        st.session_state["project"] = project
+
     # show the current project
     st.write(f"Current project: **{project.name}**")
 
@@ -20,6 +24,10 @@ def main(project=Path.cwd()):
     read_data_storage_path = project.joinpath(
         "11_read_table", "data", f"read_data_storage_{project_name}.h5.lz"
     )
+
+    # add the read data storage path to the session state
+    if "read_data_storage_path" not in st.session_state:
+        st.session_state["read_data_storage_path"] = read_data_storage_path
     # collect number of sequences and number of samples
     with pd.HDFStore(read_data_storage_path, mode="r") as store:
         number_of_sequences = store.get_storer("sequence_data").nrows

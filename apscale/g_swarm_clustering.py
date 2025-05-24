@@ -203,7 +203,7 @@ def chimera_removal(file: str, project=None, comp_lvl=None) -> None:
     )
     f = subprocess.run(["vsearch", "--version"], capture_output=True)
     vsearch_version = f.stderr.decode("ascii", errors="ignore")
-    vsearch_version = re.findall("vsearch ([\w\.]*)", vsearch_version)[0]
+    vsearch_version = re.findall(r"vsearch ([\w\.]*)", vsearch_version)[0]
 
     # collect the remaining sequences from the fasta
     fasta_length = len(list(SimpleFastaParser(gzip.open(output_path_gzipped, "rt"))))

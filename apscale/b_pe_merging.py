@@ -112,7 +112,7 @@ def pe_merge(
     if not empty_file(file_pair[0]):
         f = subprocess.run(["vsearch", "--version"], capture_output=True)
         version = f.stderr.decode("ascii", errors="ignore")
-        version = re.findall("vsearch ([\w\.]*)", version)[0]
+        version = re.findall(r"vsearch ([\w\.]*)", version)[0]
     else:
         version = "empty input"
 
