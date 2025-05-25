@@ -1,7 +1,30 @@
 import streamlit as st
-import apscale, subprocess, sys
+import apscale, subprocess, sys, shutil
 from pathlib import Path
 import pandas as pd
+
+
+def initialize_read_storage(read_data_storage_path: str, project: str) -> None:
+    """Functin to initialize the read storage for the analyze module.
+    If it already has been initialized, nothing happens, otherwise the read storage
+    from step 11 will be copied here.
+
+    Args:
+        read_data_storage_path (str): Path to the read storage
+        project (str): Path to the project we are working in
+    """
+    # check if the file exists already
+    read_data_storage_name = read_data_storage_path.name
+    read_data_to_modify = project.joinpath("12_analyze", "data", read_data_storage_name)
+
+    # add the read_data_to_modify to the session state
+    if "read_data_to_modify" not in st.session_state:
+        st.session_state["read_data_to_modify"] = read_data_to_modify
+
+    if read_data_to_modify.is_file():
+        pass
+    else:
+        shutil.copyfile(read_data_storage_path, read_data_to_modify)
 
 
 def main(project=Path.cwd()):
@@ -32,6 +55,9 @@ def main(project=Path.cwd()):
     with pd.HDFStore(read_data_storage_path, mode="r") as store:
         number_of_sequences = store.get_storer("sequence_data").nrows
         number_of_samples = store.get_storer("sample_data").nrows
+
+    # if the data storage is not already in the 12_analyze folder, put a copy there
+    initialize_read_storage(read_data_storage_path, project)
 
     st.write(
         f"This project contains **{number_of_sequences}** sequences and **{number_of_samples}** samples."

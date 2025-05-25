@@ -43,6 +43,48 @@ def check_valid_sample_identifier(sample_names: list) -> list:
     return difference
 
 
+def add_data_to_read_storage(
+    read_data_storage_path: str,
+    read_data_to_modify: str,
+    data_to_add: str,
+    sample_identifier: str,
+):
+    """Function to add the metadata to the read storage.
+
+    Args:
+        read_data_storage_path (str): Path to the original read_store
+        read_data_to_modify (str): Path to the copy of the read store that can be modified
+        data_to_add (str): the data to add to the read store
+        sample_identifier (str): The sample identifier that identifies the sample in the data to add
+    """
+    # read the data from the storage
+    sample_data = pd.read_hdf(read_data_storage_path, key="sample_data")
+
+    # preserve the index
+    sample_data = sample_data.reset_index()
+
+    # create the new data by a merge
+    updated_data = sample_data.merge(
+        data_to_add,
+        left_on="sample_name",
+        right_on=sample_identifier,
+        how="inner",
+    ).drop(columns=[sample_identifier])
+
+    # reset the index
+    updated_data = updated_data.set_index("sample_idx")
+
+    # remove the sample data from the hdf, add the updated data
+    with pd.HDFStore(read_data_to_modify) as store:
+        del store["sample_data"]
+
+    # add the updated data
+    updated_data.to_hdf(read_data_to_modify, key="sample_data")
+
+    # return true on success
+    return True
+
+
 def main():
     # define the title
     st.title("Add sample metadata")
@@ -105,14 +147,24 @@ def main():
                 st.subheader("File preview")
                 # define the columns to preview
                 preview_columns = [sample_identifier] + metadata_fields
-                st.write(sample_metadata[preview_columns])
+                sample_metadata = sample_metadata[preview_columns]
+                st.write(sample_metadata)
 
                 # more structure to the page
                 st.divider()
 
                 # finally add the read data to the read storage
                 if st.button("Add sample metadata to read storage", type="primary"):
-                    pass
+                    # create a copy of the read store in folder 12 and add the data
+                    success = add_data_to_read_storage(
+                        st.session_state["read_data_storage_path"],
+                        st.session_state["read_data_to_modify"],
+                        sample_metadata,
+                        sample_identifier,
+                    )
+                    if success:
+                        st.success("Data saved successfully.", icon="✅")
+
     except FileNotFoundError:
         # add some text for context
         st.text(
@@ -130,15 +182,6 @@ def main():
             sample_metadata = get_file_type_and_read(sample_metadata)
             sample_metadata.to_parquet(sample_metadata_path)
             st.rerun()
-    # if sample_metadata:
-    #     # read the sample metadata as dataframe
-    #     sample_metadata = get_file_type_and_read(sample_metadata)
-
-    #     # ask for the sample identifier
-    #     sample_idx = st.selectbox(
-    #         "Please select the column with the sample identifier:",
-    #         options=sample_metadata.columns,
-    #     )
 
 
 main()
