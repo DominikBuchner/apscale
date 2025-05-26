@@ -36,9 +36,13 @@ def check_valid_sequence_identifier(sequence_ids: list) -> list:
         key="sequence_data",
         columns=["hash"],
     )
+
     difference = set(storage_sequence_ids["hash"].unique()).difference(sequence_ids)
 
-    return difference
+    if difference == {"empty_seq"}:
+        return set()
+    else:
+        return difference
 
 
 def add_data_to_read_storage(
@@ -66,7 +70,7 @@ def add_data_to_read_storage(
         data_to_add,
         left_on="hash",
         right_on=sequence_identifier,
-        how="inner",
+        how="left",
     ).drop(columns=[sequence_identifier])
 
     # reset the index
@@ -77,7 +81,9 @@ def add_data_to_read_storage(
         del store["sequence_data"]
 
     # add the updated data
-    updated_data.to_hdf(read_data_to_modify, key="sequence_data")
+    updated_data.to_hdf(
+        read_data_to_modify, key="sequence_data", format="table", data_columns=True
+    )
 
     # return true on success
     return True
