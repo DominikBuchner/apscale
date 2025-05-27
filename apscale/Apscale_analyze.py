@@ -27,6 +27,16 @@ def initialize_read_storage(read_data_storage_path: str, project: str) -> None:
         shutil.copyfile(read_data_storage_path, read_data_to_modify)
 
 
+def reset_metadata(read_data_storage_path, read_data_to_modify):
+    """Function to reset the metadata file.
+
+    Args:
+        read_data_storage_path (_type_): Path to the original read store.
+        read_data_to_modify (_type_): Path to the new read store to generate.
+    """
+    shutil.copyfile(read_data_storage_path, read_data_to_modify)
+
+
 def main(project=Path.cwd()):
     # configure the sidebar
     st.title("Welcome to the Apscale analysis module")
@@ -70,6 +80,23 @@ def main(project=Path.cwd()):
     st.write(
         "This module will grow over time with additional functions we consider useful for metabarcoding analysis."
     )
+
+    # add a divier to reset all metadata
+    st.divider()
+
+    # add the button to reset the metadata
+    data_reset = st.button(
+        label="Reset all metadata",
+        help="Resets all metadata by creating a clean copy of read storage. Old metadata will be lost!",
+        type="primary",
+    )
+
+    if data_reset:
+        reset_metadata(
+            st.session_state["read_data_storage_path"],
+            st.session_state["read_data_to_modify"],
+        )
+        st.info("Metadata has been reset", icon="ℹ️")
 
 
 if __name__ == "__main__":

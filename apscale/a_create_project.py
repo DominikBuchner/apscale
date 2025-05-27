@@ -26,6 +26,7 @@ def create_project(project_name):
         "09_replicate_merging/data",
         "10_nc_removal/data",
         "11_read_table",
+        "12_analyze/data",
     ]
 
     subfolders = [

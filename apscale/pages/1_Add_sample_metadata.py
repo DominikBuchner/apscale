@@ -76,10 +76,11 @@ def add_data_to_read_storage(
 
     # remove the sample data from the hdf, add the updated data
     with pd.HDFStore(read_data_to_modify) as store:
-        del store["sample_data"]
+        if "sample_metadata" in store.keys():
+            del store["sample_metadata"]
 
     # add the updated data
-    updated_data.to_hdf(read_data_to_modify, key="sample_data")
+    updated_data.to_hdf(read_data_to_modify, key="sample_metadata")
 
     # return true on success
     return True
@@ -114,7 +115,7 @@ def main():
         st.subheader("Select and modify metadata")
         # selec the sample identifier
         sample_identifier = st.selectbox(
-            "Select the sample identifier column", options=sample_metadata.columns
+            "Select the sample identifier column:", options=sample_metadata.columns
         )
         # check if all sample names present in the hdf are present in the metadata folder
         if sample_identifier:
@@ -132,13 +133,13 @@ def main():
                     missing_samples_text += f"- {sample_id}\n"
                 st.write(missing_samples_text)
             else:
-                st.success("All sample IDs match the read storage", icon="✅")
+                st.success("All sample IDs match the read storage.", icon="✅")
                 # select the metadata to be added
                 metadata_fields = [
                     col for col in sample_metadata.columns if col != sample_identifier
                 ]
                 metadata_fields = st.multiselect(
-                    "Select all metadata fields to add to the read storage",
+                    "Select all metadata fields to add to the read storage:",
                     options=metadata_fields,
                     default=metadata_fields,
                 )
