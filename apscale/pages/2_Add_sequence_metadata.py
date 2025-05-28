@@ -76,13 +76,9 @@ def add_data_to_read_storage(
     # reset the index
     updated_data = updated_data.set_index("hash_idx")
 
-    # remove the sample data from the hdf, add the updated data
-    with pd.HDFStore(read_data_to_modify) as store:
-        del store["sequence_data"]
-
     # add the updated data
     updated_data.to_hdf(
-        read_data_to_modify, key="sequence_data", format="table", data_columns=True
+        read_data_to_modify, key="sequence_metadata", format="table", data_columns=True
     )
 
     # return true on success

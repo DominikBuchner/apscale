@@ -108,7 +108,7 @@ def merge_replicates(
         total_output_reads,
     ]
 
-    return log_data
+    return log_data, len(input_files)
 
 
 def main(project=Path.cwd()):
@@ -231,10 +231,22 @@ def main(project=Path.cwd()):
                 for matched_files in matches_dict.keys()
             )
 
-            # extract the number of input files for computing the columns
-            nr_of_input_files = len(log_data[0]) - 6
+            # compute the maximum number of input files, as these may differ depending on the nr of replicates
+            max_inputs = max([log[-1] for log in log_data])
 
-            columns = [f"input file {i}" for i in range(1, nr_of_input_files + 1)] + [
+            # save the updated log here
+            updated_log_data = []
+            # fill up the log data with less input files
+            for log in log_data:
+                # calculate the nr of strings to add
+                to_fill = max_inputs - log[-1]
+                if to_fill == 0:
+                    updated_log_data.append(log[0])
+                else:
+                    log = log[0][: log[-1]] + [""] * to_fill + log[0][log[-1] :]
+                    updated_log_data.append(log)
+
+            columns = [f"input file {i}" for i in range(1, max_inputs + 1)] + [
                 "output file",
                 "finished at",
                 "total input sequences",
@@ -244,7 +256,7 @@ def main(project=Path.cwd()):
             ]
 
             # put everything in a log dataframe
-            log_df = pd.DataFrame(log_data, columns=columns)
+            log_df = pd.DataFrame(updated_log_data, columns=columns)
             log_df = log_df.sort_values(by=["output file"])
 
             # write the log file

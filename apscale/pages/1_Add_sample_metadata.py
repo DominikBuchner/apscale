@@ -80,7 +80,9 @@ def add_data_to_read_storage(
             del store["sample_metadata"]
 
     # add the updated data
-    updated_data.to_hdf(read_data_to_modify, key="sample_metadata")
+    updated_data.to_hdf(
+        read_data_to_modify, key="sample_metadata", format="table", data_columns=True
+    )
 
     # return true on success
     return True

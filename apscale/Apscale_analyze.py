@@ -37,6 +37,28 @@ def reset_metadata(read_data_storage_path, read_data_to_modify):
     shutil.copyfile(read_data_storage_path, read_data_to_modify)
 
 
+def collect_metadata_columns(read_data_to_modify: str) -> tuple:
+    """Function to collect the number of columns from the metadata tables.
+
+    Args:
+        read_data_to_modify (str): Path to the read data storage with added metadata
+
+    Returns:
+        tuple: Number of sample metadata columns, number of sequence metadata columns
+    """
+    sample_cols, sequence_cols = 0, 0
+
+    with pd.HDFStore(read_data_to_modify, mode="r") as store:
+        if "/sample_metadata" in store.keys():
+            sample_cols = len(store.get_storer("sample_metadata").table.colnames) - 2
+        if "/sequence_metadata" in store.keys():
+            sequence_cols = (
+                len(store.get_storer("sequence_metadata").table.colnames) - 3
+            )
+
+    return sample_cols, sequence_cols
+
+
 def main(project=Path.cwd()):
     # configure the sidebar
     st.title("Welcome to the Apscale analysis module")
@@ -81,6 +103,17 @@ def main(project=Path.cwd()):
         "This module will grow over time with additional functions we consider useful for metabarcoding analysis."
     )
 
+    # add a divier to display metadata stats
+    st.divider()
+
+    # try to collect the number of sample metadata columns and sequence metadata columns
+    sample_metadata_cols, sequence_metadata_cols = collect_metadata_columns(
+        st.session_state["read_data_to_modify"]
+    )
+
+    st.write(
+        f"This project currently contains **{sample_metadata_cols} sample metadata columns** and **{sequence_metadata_cols} sequence metadata columns**."
+    )
     # add a divier to reset all metadata
     st.divider()
 
@@ -97,6 +130,7 @@ def main(project=Path.cwd()):
             st.session_state["read_data_to_modify"],
         )
         st.info("Metadata has been reset", icon="ℹ️")
+        st.rerun()
 
 
 if __name__ == "__main__":
