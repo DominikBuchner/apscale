@@ -1,4 +1,4 @@
-import glob, gzip, pickle, shutil, datetime, os
+import glob, gzip, pickle, shutil, datetime, os, math
 import dask.dataframe as dd
 from zict import File, Buffer, LRU, Func
 from pathlib import Path
@@ -261,6 +261,21 @@ def generate_fasta(project: str, hdf_savename: str, chunksize: int) -> None:
     return fasta_data
 
 
+def generate_sequence_groups(
+    project: str, hdf_savename: str, fasta_data: object, chunksize: object
+):
+    # repartition the dataset to 10 MB chunks, required for large datasets
+    fasta_data = fasta_data.repartition(partition_size="10_000_000")
+
+    # read the required data from that chunk
+    for chunk in fasta_data.to_delayed():
+        # compute the chunk
+        chunk = chunk.compute()
+        # iterate over the sequences
+        for hash_idx, hash, seq in zip(chunk["hash_idx"], chunk["hash"], chunk["seq"]):
+            print(hash_idx, hash, seq)
+
+
 def generate_read_table(
     project: str,
     hdf_savename: str,
@@ -293,7 +308,7 @@ def generate_read_table(
         )
     )
 
-    # loop over both possbilities
+    # loop over both possibilities
     for format, setting in zip(formats, (to_excel, to_parquet)):
         # nothing to do if the setting is set to false
         if setting == False:
@@ -410,6 +425,7 @@ def main(project=Path.cwd()):
     perform = settings["generate read table"].item()
     to_excel = settings["to excel"].item()
     to_parquet = settings["to parquet"].item()
+    group_threshold = settings["sequence group threshold"].item()
 
     # find out which dataset to load
     prior_step = choose_input(project, "11_generate_read_table")
@@ -456,6 +472,30 @@ def main(project=Path.cwd()):
     # sort the hdf store to generate the fasta file, generate the fasta file
     fasta_data = generate_fasta(project, hdf_savename, 100_000)
 
+    # generate sequence groups
+    if group_threshold >= 1:
+        # user output
+        print(
+            "{}: Grouping threshold cannot be larger or equal to one. Step will be skipped.".format(
+                datetime.datetime.now().strftime("%H:%M:%S")
+            )
+        )
+    elif group_threshold <= 0 or math.isnan(group_threshold):
+        # user output
+        print(
+            "{}: Grouping threshold cannot 0 or smaller. Step will be skipped.".format(
+                datetime.datetime.now().strftime("%H:%M:%S")
+            )
+        )
+    else:
+        # user output
+        print(
+            "{}: Group threshold of {} detected. Sequence groups are calculated.".format(
+                datetime.datetime.now().strftime("%H:%M:%S"), group_threshold
+            )
+        )
+        # generate sequence groups from the fasta_data
+        generate_sequence_groups(project, hdf_savename, fasta_data, 100_000)
     # create parquet and excel outputs from the hdf
     print(
         "{}: Generating read table(s).".format(
@@ -463,5 +503,6 @@ def main(project=Path.cwd()):
         )
     )
 
-    # generate the read tables
-    generate_read_table(project, hdf_savename, to_excel, to_parquet, fasta_data)
+    # generate the read tables if requests
+    if perform:
+        generate_read_table(project, hdf_savename, to_excel, to_parquet, fasta_data)
