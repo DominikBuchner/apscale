@@ -3,6 +3,7 @@ import dask.dataframe as dd
 from zict import File, Buffer, LRU, Func
 from pathlib import Path
 from Bio.SeqIO.FastaIO import SimpleFastaParser
+from Bio import Align
 import pandas as pd
 from apscale.a_create_project import choose_input
 from more_itertools import chunked
@@ -262,10 +263,19 @@ def generate_fasta(project: str, hdf_savename: str, chunksize: int) -> None:
 
 
 def generate_sequence_groups(
-    project: str, hdf_savename: str, fasta_data: object, chunksize: object
+    project: str,
+    hdf_savename: str,
+    fasta_data: object,
+    chunksize: object,
+    group_threshold: float,
+    aligner: object,
 ):
     # repartition the dataset to 10 MB chunks, required for large datasets
     fasta_data = fasta_data.repartition(partition_size="10_000_000")
+
+    # store the sequence group data here, flush if neccessary
+    sequence_group_data = []
+    group_data = []
 
     # read the required data from that chunk
     for chunk in fasta_data.to_delayed():
@@ -273,7 +283,17 @@ def generate_sequence_groups(
         chunk = chunk.compute()
         # iterate over the sequences
         for hash_idx, hash, seq in zip(chunk["hash_idx"], chunk["hash"], chunk["seq"]):
-            print(hash_idx, hash, seq)
+            # compare the seq to all groups found so far -> parallized, chunked
+            # use hdf store first
+
+            # use memory store if no match is found
+
+            # append to memory store if still no match is found
+
+            # flush memory to hdf is still no match is found
+
+            # flush sequence group data every n sequences
+            pass
 
 
 def generate_read_table(
@@ -494,8 +514,29 @@ def main(project=Path.cwd()):
                 datetime.datetime.now().strftime("%H:%M:%S"), group_threshold
             )
         )
+
+        # define the aligner once with vsearch defaults
+        aligner = Align.PairwiseAligner(
+            match_score=2,
+            mismatch_score=-4,
+            target_internal_open_gap_score=-20,
+            target_internal_extend_gap_score=-2,
+            target_left_open_gap_score=-2,
+            target_left_extend_gap_score=-1,
+            target_right_open_gap_score=-2,
+            target_right_extend_gap_score=-1,
+            query_internal_open_gap_score=-20,
+            query_internal_extend_gap_score=-2,
+            query_left_open_gap_score=-2,
+            query_left_extend_gap_score=-1,
+            query_right_open_gap_score=-2,
+            query_right_extend_gap_score=-1,
+        )
+
         # generate sequence groups from the fasta_data
-        generate_sequence_groups(project, hdf_savename, fasta_data, 100_000)
+        generate_sequence_groups(
+            project, hdf_savename, fasta_data, 100_000, group_threshold, aligner
+        )
     # create parquet and excel outputs from the hdf
     print(
         "{}: Generating read table(s).".format(
