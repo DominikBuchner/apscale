@@ -7,6 +7,7 @@ from Bio import Align
 import pandas as pd
 from apscale.a_create_project import choose_input
 from more_itertools import chunked
+from joblib import Parallel, delayed
 
 
 def parse_fasta_data(input_path: str):
@@ -277,22 +278,28 @@ def generate_sequence_groups(
     sequence_group_data = []
     group_data = []
 
+    hdf_group_data_exists = False
     # read the required data from that chunk
     for chunk in fasta_data.to_delayed():
         # compute the chunk
         chunk = chunk.compute()
         # iterate over the sequences
         for hash_idx, hash, seq in zip(chunk["hash_idx"], chunk["hash"], chunk["seq"]):
+            # skip the empty seq
+            if hash_idx == 0:
+                continue
+
             # compare the seq to all groups found so far -> parallized, chunked
+            match = False
             # use hdf store first
 
             # use memory store if no match is found
 
             # append to memory store if still no match is found
 
-            # flush memory to hdf is still no match is found
+            # flush memory to hdf if there are chunksize sequences in it
 
-            # flush sequence group data every n sequences
+            # flush sequence group data every chunksize sequences
             pass
 
 
@@ -535,7 +542,7 @@ def main(project=Path.cwd()):
 
         # generate sequence groups from the fasta_data
         generate_sequence_groups(
-            project, hdf_savename, fasta_data, 100_000, group_threshold, aligner
+            project, hdf_savename, fasta_data, 1_000, group_threshold, aligner
         )
     # create parquet and excel outputs from the hdf
     print(

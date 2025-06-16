@@ -237,12 +237,12 @@ def main():
     if "analyze" in args:
         if not args.analyze:
             subprocess.run(
-                "streamlit run C:\\Users\\Dominik\\Documents\\GitHub\\apscale\\apscale\\Apscale_analyze.py"
+                "streamlit run C:\\Users\\Dominik\\Dokumente\\GitHub\\apscale\\apscale\\Apscale_analyze.py"
             )
         else:
             path = Path(args.analyze)
             subprocess.run(
-                f'streamlit run C:\\Users\\Dominik\\Documents\\GitHub\\apscale\\apscale\\Apscale_analyze.py -- "{path}"'
+                f'streamlit run C:\\Users\\Dominik\\Dokumente\\GitHub\\apscale\\apscale\\Apscale_analyze.py -- "{path}"'
             )
 
     ## print help if no argument is provided
