@@ -1,5 +1,6 @@
-import glob, gzip, pickle, shutil, datetime, os, math
+import glob, gzip, pickle, shutil, datetime, os, math, subprocess, duckdb, time
 import dask.dataframe as dd
+import pyarrow as pa
 from zict import File, Buffer, LRU, Func
 from pathlib import Path
 from Bio.SeqIO.FastaIO import SimpleFastaParser
@@ -8,6 +9,7 @@ import pandas as pd
 from apscale.a_create_project import choose_input
 from more_itertools import chunked
 from joblib import Parallel, delayed
+from tqdm import tqdm
 
 
 def parse_fasta_data(input_path: str):
@@ -244,6 +246,10 @@ def generate_fasta(project: str, hdf_savename: str, chunksize: int) -> None:
     # sort the values by read count
     fasta_data = fasta_data.sort_values(by=["read_count"], ascending=False)
 
+    # store a fasta order column for grouping operations
+    fasta_data = fasta_data.assign(fasta_order=1)
+    fasta_data["fasta_order"] = fasta_data.fasta_order.cumsum() - 1
+
     # generate a savename for the fasta file
     fasta_savename = Path(project).joinpath(
         "11_read_table",
@@ -260,47 +266,211 @@ def generate_fasta(project: str, hdf_savename: str, chunksize: int) -> None:
                 if hash != "empty_seq":
                     out_stream.write(f">{hash}\n{seq}\n")
 
-    return fasta_data
+    return fasta_data, fasta_savename
 
 
 def generate_sequence_groups(
-    project: str,
-    hdf_savename: str,
-    fasta_data: object,
-    chunksize: object,
-    group_threshold: float,
-    aligner: object,
+    project, hdf_savename, fasta_data, fasta_savename, group_threshold, chunksize
 ):
-    # repartition the dataset to 10 MB chunks, required for large datasets
-    fasta_data = fasta_data.repartition(partition_size="10_000_000")
+    # generate the vsearch matchfile for pairwise comparisons
+    matchfile_path = Path(project).joinpath(
+        "11_read_table",
+        "data",
+        "matchfile_{}.csv".format(str(group_threshold).replace(".", "")),
+    )
 
-    # store the sequence group data here, flush if neccessary
-    sequence_group_data = []
-    group_data = []
+    print(
+        "{}: Computing matchfile with vsearch.".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
 
-    hdf_group_data_exists = False
-    # read the required data from that chunk
-    for chunk in fasta_data.to_delayed():
+    with open(matchfile_path, "w") as output:
+        # run vsearch and pipe stdout to the file
+        subprocess.run(
+            [
+                "vsearch",
+                "--usearch_global",
+                fasta_savename,
+                "--db",
+                fasta_savename,
+                "--self",
+                "--id",
+                str(group_threshold),
+                "--userout",
+                "-",
+                "--quiet",
+                "--userfields",
+                "query+target+id",
+                "--maxaccepts",
+                str(0),
+            ],
+            stdout=output,
+        )
+
+    # ingest the data into a dask dataframe
+    matchfile = dd.read_csv(
+        matchfile_path,
+        sep="\t",
+        names=["query", "target", "pct_id"],
+    )
+
+    # add the hash idx and order to query
+    matchfile = (
+        dd.merge(
+            left=matchfile,
+            right=fasta_data[["hash_idx", "hash", "fasta_order"]],
+            how="left",
+            left_on="query",
+            right_on="hash",
+        )
+        .drop(columns="hash")
+        .rename(
+            columns={
+                "hash_idx": "hash_idx_query",
+                "fasta_order": "fasta_order_query",
+            }
+        )
+    )
+
+    # add the hash idx and order to target
+    matchfile = (
+        dd.merge(
+            left=matchfile,
+            right=fasta_data[["hash_idx", "hash", "fasta_order"]],
+            how="left",
+            left_on="target",
+            right_on="hash",
+        )
+        .drop(columns="hash")
+        .rename(
+            columns={
+                "hash_idx": "hash_idx_target",
+                "fasta_order": "fasta_order_target",
+            }
+        )
+    )
+
+    print(
+        "{}: Creating group lookup table.".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
+
+    # stream data to duck db
+    duckdb_savename = Path(project).joinpath(
+        "11_read_table",
+        "data",
+        "group_lookup_table.duckdb",
+    )
+
+    # remove old lookup table
+    if duckdb_savename.is_file():
+        duckdb_savename.unlink()
+
+    # connect to duckdb database
+    db_connection = duckdb.connect(duckdb_savename)
+    # stream the data to duck db
+    for chunk_nr, data_chunk in enumerate(matchfile.to_delayed()):
         # compute the chunk
-        chunk = chunk.compute()
-        # iterate over the sequences
-        for hash_idx, hash, seq in zip(chunk["hash_idx"], chunk["hash"], chunk["seq"]):
-            # skip the empty seq
-            if hash_idx == 0:
+        data_chunk = data_chunk.compute()
+        data_chunk = pa.Table.from_pandas(data_chunk)
+        # create the table for the first chunk
+        if chunk_nr == 0:
+            db_connection.sql("CREATE TABLE matchfile AS SELECT * FROM data_chunk")
+        else:
+            db_connection.sql("INSERT INTO matchfile SELECT * FROM data_chunk")
+
+    print(
+        "{}: Grouping sequences.".format(datetime.datetime.now().strftime("%H:%M:%S"))
+    )
+
+    first = True
+    sequence_group_data = []
+    # loop over the chunks from fasta_data and sort them into groups
+    for fasta_data_chunk in fasta_data.to_delayed():
+        # compute the chunk to generate the iterator
+        fasta_data_chunk = fasta_data_chunk.compute()
+
+        # loop over the rows of the datachunk
+        for hash_idx, _, hash, seq, _ in fasta_data_chunk.itertuples(index=False):
+            # look for the matches in the matches table
+            all_hash_matches = db_connection.sql(
+                f"SELECT * FROM matchfile WHERE hash_idx_query = {hash_idx}"
+            ).to_df()
+            # if it is the first add it to the groups found table
+            if first:
+                db_connection.sql(
+                    "CREATE TABLE groups_found AS SELECT * from all_hash_matches"
+                )
+                # continue after the insertion, set first to false
+                first = False
+                sequence_group_data.append((hash_idx, hash, seq, hash_idx))
                 continue
 
-            # compare the seq to all groups found so far -> parallized, chunked
-            match = False
-            # use hdf store first
+            # now the actual checking happens get all potential matches for the current hash from the groups found
+            group_assignment = db_connection.sql(
+                f"SELECT * FROM groups_found WHERE hash_idx_target = {hash_idx} ORDER BY fasta_order_query LIMIT 1"
+            ).to_df()
 
-            # use memory store if no match is found
+            if group_assignment.empty:
+                db_connection.sql(
+                    "INSERT INTO groups_found SELECT * FROM all_hash_matches"
+                )
+                sequence_group_data.append((hash_idx, hash, seq, hash_idx))
+            else:
+                # extract the value from the group assignment
+                sequence_group_data.append(
+                    (
+                        hash_idx,
+                        hash,
+                        seq,
+                        group_assignment["hash_idx_query"].item(),
+                    )
+                )
+        # flush to hdf every 10k sequences
+        if len(sequence_group_data) >= chunksize:
+            # create a dataframe from sequence group data
+            sequence_group_data = pd.DataFrame(
+                sequence_group_data,
+                columns=[
+                    "hash_idx",
+                    "hash",
+                    "seq",
+                    "group_idx",
+                ],
+            )
+            with pd.HDFStore(
+                hdf_savename, mode="a", complib="blosc:blosclz", complevel=9
+            ) as hdf_output:
+                hdf_output.append(
+                    key="sequence_group_data",
+                    value=sequence_group_data,
+                    format="table",
+                    data_columns=True,
+                )
+            sequence_group_data = []
+    # at the end of the loop flush the sequence group data
+    else:
+        # create a dataframe from sequence group data
+        sequence_group_data = pd.DataFrame(
+            sequence_group_data,
+            columns=["hash_idx", "hash", "seq", "group_idx"],
+        )
+        with pd.HDFStore(
+            hdf_savename, mode="a", complib="blosc:blosclz", complevel=9
+        ) as hdf_output:
+            hdf_output.append(
+                key="sequence_group_data",
+                value=sequence_group_data,
+                format="table",
+                data_columns=True,
+            )
 
-            # append to memory store if still no match is found
+    # finally close the db connection
+    db_connection.close()
 
-            # flush memory to hdf if there are chunksize sequences in it
-
-            # flush sequence group data every chunksize sequences
-            pass
+    # create the sequence group read count storage
 
 
 def generate_read_table(
@@ -497,7 +667,7 @@ def main(project=Path.cwd()):
     )
 
     # sort the hdf store to generate the fasta file, generate the fasta file
-    fasta_data = generate_fasta(project, hdf_savename, 100_000)
+    fasta_data, fasta_savename = generate_fasta(project, hdf_savename, 100_000)
 
     # generate sequence groups
     if group_threshold >= 1:
@@ -522,28 +692,16 @@ def main(project=Path.cwd()):
             )
         )
 
-        # define the aligner once with vsearch defaults
-        aligner = Align.PairwiseAligner(
-            match_score=2,
-            mismatch_score=-4,
-            target_internal_open_gap_score=-20,
-            target_internal_extend_gap_score=-2,
-            target_left_open_gap_score=-2,
-            target_left_extend_gap_score=-1,
-            target_right_open_gap_score=-2,
-            target_right_extend_gap_score=-1,
-            query_internal_open_gap_score=-20,
-            query_internal_extend_gap_score=-2,
-            query_left_open_gap_score=-2,
-            query_left_extend_gap_score=-1,
-            query_right_open_gap_score=-2,
-            query_right_extend_gap_score=-1,
+        # calculate the sequence group
+        generate_sequence_groups(
+            project,
+            hdf_savename,
+            fasta_data,
+            fasta_savename,
+            group_threshold,
+            chunksize=100_000,
         )
 
-        # generate sequence groups from the fasta_data
-        generate_sequence_groups(
-            project, hdf_savename, fasta_data, 1_000, group_threshold, aligner
-        )
     # create parquet and excel outputs from the hdf
     print(
         "{}: Generating read table(s).".format(
