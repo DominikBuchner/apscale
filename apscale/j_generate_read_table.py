@@ -370,6 +370,7 @@ def generate_sequence_groups(
 
     # connect to duckdb database
     db_connection = duckdb.connect(duckdb_savename)
+
     # stream the data to duck db
     for chunk_nr, data_chunk in enumerate(matchfile.to_delayed()):
         # compute the chunk
