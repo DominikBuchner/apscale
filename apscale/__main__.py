@@ -1,4 +1,4 @@
-import argparse, sys, subprocess
+import argparse, sys, subprocess, duckdb
 from pathlib import Path
 from apscale import (
     a_create_project,
@@ -17,6 +17,7 @@ from apscale import (
 
 ## main function for the command line interface
 def main():
+    print(duckdb.connect(":memory"))
     ## initialize the parse and display default behavior if called without arguments
     formatter = lambda prog: argparse.HelpFormatter(prog, max_help_position=35)
     parser = argparse.ArgumentParser(
