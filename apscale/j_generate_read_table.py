@@ -363,7 +363,7 @@ def generate_sequence_groups(
         "data",
         "group_lookup_table.duckdb",
     )
-    print(duckdb.connect(":memory:"))
+
     # remove old lookup table
     if duckdb_savename.is_file():
         duckdb_savename.unlink()
