@@ -670,6 +670,17 @@ def main(project=Path.cwd()):
     # sort the hdf store to generate the fasta file, generate the fasta file
     fasta_data, fasta_savename = generate_fasta(project, hdf_savename, 100_000)
 
+    # create parquet and excel outputs from the hdf
+    print(
+        "{}: Generating read table(s).".format(
+            datetime.datetime.now().strftime("%H:%M:%S")
+        )
+    )
+
+    # generate the read tables if requests
+    if perform:
+        generate_read_table(project, hdf_savename, to_excel, to_parquet, fasta_data)
+
     # generate sequence groups
     if group_threshold >= 1:
         # user output
@@ -702,14 +713,3 @@ def main(project=Path.cwd()):
             group_threshold,
             chunksize=100_000,
         )
-
-    # create parquet and excel outputs from the hdf
-    print(
-        "{}: Generating read table(s).".format(
-            datetime.datetime.now().strftime("%H:%M:%S")
-        )
-    )
-
-    # generate the read tables if requests
-    if perform:
-        generate_read_table(project, hdf_savename, to_excel, to_parquet, fasta_data)
