@@ -467,7 +467,7 @@ def generate_sequence_groups(
 
     # transform the mapping to excel to make it human readable
 
-    # perform aggregation on the mapping
+    # perform aggregation on the mapping, add an order before dropping duplicates to retain the original order
 
     # create the sequence group read count storage
 
