@@ -388,6 +388,9 @@ def generate_sequence_groups(
 
     first = True
     sequence_group_data = []
+    sequence_group_savename = Path(project).joinpath(
+        "11_read_table", "data", "group_mapping.csv"
+    )
     # loop over the chunks from fasta_data and sort them into groups
     for fasta_data_chunk in fasta_data.to_delayed():
         # compute the chunk to generate the iterator
@@ -429,7 +432,7 @@ def generate_sequence_groups(
                         group_assignment["hash_idx_query"].item(),
                     )
                 )
-        # flush to hdf every 10k sequences
+        # flush to csv every 10k sequences
         if len(sequence_group_data) >= chunksize:
             # create a dataframe from sequence group data
             sequence_group_data = pd.DataFrame(
@@ -441,15 +444,12 @@ def generate_sequence_groups(
                     "group_idx",
                 ],
             )
-            with pd.HDFStore(
-                hdf_savename, mode="a", complib="blosc:blosclz", complevel=9
-            ) as hdf_output:
-                hdf_output.append(
-                    key="sequence_group_data",
-                    value=sequence_group_data,
-                    format="table",
-                    data_columns=True,
-                )
+            sequence_group_data.to_csv(
+                sequence_group_savename,
+                sep="\t",
+                index=False,
+                mode="a",
+            )
             sequence_group_data = []
     # at the end of the loop flush the sequence group data
     else:
@@ -458,18 +458,16 @@ def generate_sequence_groups(
             sequence_group_data,
             columns=["hash_idx", "hash", "seq", "group_idx"],
         )
-        with pd.HDFStore(
-            hdf_savename, mode="a", complib="blosc:blosclz", complevel=9
-        ) as hdf_output:
-            hdf_output.append(
-                key="sequence_group_data",
-                value=sequence_group_data,
-                format="table",
-                data_columns=True,
-            )
+        sequence_group_data.to_csv(
+            sequence_group_savename, sep="\t", index=False, mode="a"
+        )
 
     # finally close the db connection
     db_connection.close()
+
+    # transform the mapping to excel to make it human readable
+
+    # perform aggregation on the mapping
 
     # create the sequence group read count storage
 
