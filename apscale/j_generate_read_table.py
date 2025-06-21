@@ -695,7 +695,18 @@ def sequence_groups_to_data_storage(
     )
 
     # transform sequence group read count data to write the fasta and to push it to hdf
-    print(sequence_group_read_count_data.compute())
+    sequence_group_read_count_data = (
+        sequence_group_read_count_data[["group_idx", "sample_idx", "read_count"]]
+        .groupby(by=["group_idx", "sample_idx"])
+        .sum()
+        .reset_index()
+        .rename(columns={"group_idx": "hash_idx"})
+    )
+
+    # save to hdf
+    sequence_group_read_count_data.to_hdf(
+        hdf_savename, key="sequence_group_read_count_data", mode="a", compute=True
+    )
 
 
 def main(project=Path.cwd()):
