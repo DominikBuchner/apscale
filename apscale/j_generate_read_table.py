@@ -439,7 +439,6 @@ def generate_sequence_groups(
             group_assignment = db_connection.sql(
                 f"SELECT * FROM groups_found WHERE hash_idx_target = {hash_idx} ORDER BY fasta_order_query LIMIT 1"
             ).to_df()
-
             if group_assignment.empty:
                 db_connection.sql(
                     "INSERT INTO groups_found SELECT * FROM all_hash_matches"
