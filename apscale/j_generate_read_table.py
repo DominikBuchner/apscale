@@ -246,7 +246,7 @@ def generate_fasta(project: str, hdf_savename: str, chunksize: int) -> None:
     # sort the values by read count
     fasta_data = fasta_data.sort_values(by=["read_count"], ascending=False)
 
-    # store a fasta order column for grouping operations
+    # store a fasta order column for later grouping operations
     fasta_data = fasta_data.assign(fasta_order=1)
     fasta_data["fasta_order"] = fasta_data.fasta_order.cumsum() - 1
 
@@ -270,8 +270,26 @@ def generate_fasta(project: str, hdf_savename: str, chunksize: int) -> None:
 
 
 def generate_sequence_groups(
-    project, hdf_savename, fasta_data, fasta_savename, group_threshold, chunksize
+    project: str,
+    hdf_savename: str,
+    fasta_data: object,
+    fasta_savename: str,
+    group_threshold: float,
+    chunksize: int,
 ):
+    """Function to compute sequence groups with a given threshold (similar to OTUs).
+
+    Args:
+        project (str): Apscale project to work in.
+        hdf_savename (str): Path to the data storage.
+        fasta_data (object): Data from the fasta that was created for the sequences.
+        fasta_savename (str): Path to the fasta.
+        group_threshold (float): Threshold to group with. Float between 0 and 1.
+        chunksize (int): Chunksize to process the resulting sequence groups with.
+
+    Returns:
+        _type_: _description_
+    """
     # generate the vsearch matchfile for pairwise comparisons
     matchfile_path = Path(project).joinpath(
         "11_read_table",
@@ -391,6 +409,11 @@ def generate_sequence_groups(
     sequence_group_savename = Path(project).joinpath(
         "11_read_table", "data", "group_mapping.csv"
     )
+
+    # try to remove the old sequence group mapping if it exists
+    if sequence_group_savename.is_file():
+        sequence_group_savename.unlink()
+
     # loop over the chunks from fasta_data and sort them into groups
     for fasta_data_chunk in fasta_data.to_delayed():
         # compute the chunk to generate the iterator
@@ -445,10 +468,7 @@ def generate_sequence_groups(
                 ],
             )
             sequence_group_data.to_csv(
-                sequence_group_savename,
-                sep="\t",
-                index=False,
-                mode="a",
+                sequence_group_savename, sep="\t", index=False, mode="a", header=False
             )
             sequence_group_data = []
     # at the end of the loop flush the sequence group data
@@ -459,17 +479,14 @@ def generate_sequence_groups(
             columns=["hash_idx", "hash", "seq", "group_idx"],
         )
         sequence_group_data.to_csv(
-            sequence_group_savename, sep="\t", index=False, mode="a"
+            sequence_group_savename, sep="\t", index=False, mode="a", header=False
         )
 
     # finally close the db connection
     db_connection.close()
 
-    # transform the mapping to excel to make it human readable
-
-    # perform aggregation on the mapping, add an order before dropping duplicates to retain the original order
-
-    # create the sequence group read count storage
+    # return sequence group savename to continue
+    return sequence_group_savename
 
 
 def generate_read_table(
@@ -604,6 +621,83 @@ def generate_read_table(
                 wide_read_table.to_parquet(savename, index=False)
 
 
+def sequence_groups_to_data_storage(
+    project: str, sequence_group_savename: str, hdf_savename: str, chunksize: int
+):
+    # load the group mapping as a dask dataframe, break in 10 MB chunks
+    group_mapping = dd.read_csv(
+        sequence_group_savename,
+        sep="\t",
+        names=["hash_idx", "hash", "seq", "group_idx"],
+        blocksize=10e6,
+    )
+
+    # load the read count data that needs to be updated with the group mappings
+    read_count_data = dd.read_hdf(
+        hdf_savename, key="read_count_data", chunksize=chunksize
+    )
+
+    # add the group idx to the read count data
+    sequence_group_read_count_data = dd.merge(
+        left=read_count_data,
+        right=group_mapping[["hash_idx", "group_idx"]],
+        how="left",
+        left_on="hash_idx",
+        right_on="hash_idx",
+    )
+
+    # save the group mapping in human readable format
+    group_mapping = group_mapping.rename(
+        columns={
+            "hash_idx": "Original sequence ID",
+            "group_idx": "Maps to group sequence ID",
+        }
+    )
+
+    # define the output savename, chunk to multiple files if neccessary
+    group_mapping_savename = Path(project).joinpath("11_read_table", "data")
+
+    for idx, data_chunk in enumerate(group_mapping.to_delayed()):
+        # save the chunk to excel
+        data_chunk = data_chunk.compute()
+        data_chunk.to_excel(
+            group_mapping_savename.joinpath(f"group_mapping_log_part_{idx}.xlsx"),
+            index=False,
+        )
+
+    # add the sequence groups to the hdf store, replace group idx first, drop duplicates, so only the groups are left
+    group_mapping = group_mapping.drop(columns="Original sequence ID").rename(
+        columns={"Maps to group sequence ID": "hash_idx"}
+    )
+
+    # reorder the columns to make it look like the original
+    group_mapping = group_mapping[["hash_idx", "hash", "seq"]]
+
+    # drop the duplicate values
+    group_mapping = group_mapping.drop_duplicates(subset="hash_idx", keep="first")
+
+    # give user output
+    print(
+        "{}: {} sequence groups found.".format(
+            datetime.datetime.now().strftime("%H:%M:%S"),
+            group_mapping.shape[0].compute() - 1,
+        )
+    )
+
+    # convert data types to write to hdf
+    group_mapping["hash"], group_mapping["seq"] = group_mapping["hash"].astype(
+        object
+    ), group_mapping["seq"].astype(object)
+
+    # save to hdf
+    group_mapping.to_hdf(
+        hdf_savename, key="sequence_group_data", mode="a", compute=True
+    )
+
+    # transform sequence group read count data to write the fasta and to push it to hdf
+    print(sequence_group_read_count_data.compute())
+
+
 def main(project=Path.cwd()):
     """Main function to initially create the read table data.
 
@@ -702,12 +796,17 @@ def main(project=Path.cwd()):
             )
         )
 
-        # calculate the sequence group
-        generate_sequence_groups(
+        # calculate the sequence groups
+        sequence_group_savename = generate_sequence_groups(
             project,
             hdf_savename,
             fasta_data,
             fasta_savename,
             group_threshold,
             chunksize=100_000,
+        )
+
+        # update the data storage, generate user log, potentially generate read tables and fasta
+        sequence_groups_to_data_storage(
+            project, sequence_group_savename, hdf_savename, chunksize=100_000
         )
