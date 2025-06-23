@@ -27,7 +27,7 @@ def initialize_read_storage(read_data_storage_path: str, project: str) -> None:
         shutil.copyfile(read_data_storage_path, read_data_to_modify)
 
 
-def reset_metadata(read_data_storage_path, read_data_to_modify):
+def reset_metadata(read_data_storage_path, read_data_to_modify, project):
     """Function to reset the metadata file.
 
     Args:
@@ -35,6 +35,13 @@ def reset_metadata(read_data_storage_path, read_data_to_modify):
         read_data_to_modify (_type_): Path to the new read store to generate.
     """
     shutil.copyfile(read_data_storage_path, read_data_to_modify)
+
+    # remove all old parquet files from the data folder
+    data_folder = Path(project).joinpath("12_analyze", "data")
+    files = data_folder.glob("*.parquet.snappy")
+
+    for file in files:
+        file.unlink()
 
 
 def collect_metadata_columns(read_data_to_modify: str) -> tuple:
@@ -87,6 +94,11 @@ def main(project=Path.cwd()):
     with pd.HDFStore(read_data_storage_path, mode="r") as store:
         number_of_sequences = store.get_storer("sequence_data").nrows
         number_of_samples = store.get_storer("sample_data").nrows
+        # also collect the number of sequence groups if there are any
+        try:
+            number_of_sequence_groups = store.get_storer("sequence_group_data").nrows
+        except KeyError:
+            number_of_sequence_groups = 0
 
     # if the data storage is not already in the 12_analyze folder, put a copy there
     initialize_read_storage(read_data_storage_path, project)
@@ -94,6 +106,7 @@ def main(project=Path.cwd()):
     st.write(
         f"This project contains **{number_of_sequences}** sequences and **{number_of_samples}** samples."
     )
+    st.write(f"This project contains **{number_of_sequence_groups}** sequence groups.")
 
     st.write(
         "This module can be used to **add metadata** to your read storage and **export read tables**."
@@ -128,6 +141,7 @@ def main(project=Path.cwd()):
         reset_metadata(
             st.session_state["read_data_storage_path"],
             st.session_state["read_data_to_modify"],
+            project,
         )
         st.info("Metadata has been reset", icon="ℹ️")
         st.rerun()

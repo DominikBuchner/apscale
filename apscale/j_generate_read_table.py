@@ -217,17 +217,29 @@ def index_data_to_hdf(project: str, input_files: str, buffer_size: int) -> str:
     return hdf_savename
 
 
-def generate_fasta(project: str, hdf_savename: str, chunksize: int) -> None:
+def generate_fasta(
+    project: str, hdf_savename: str, chunksize: int, data_type: str
+) -> None:
     """Function to generate an ordered fasta file that holds all sequences of the dataset.
 
     Args:
         project (str): Apscale project to work in.
         hdf_savename (str): Path to the hdf file that holds the data.
         chunksize(int): Chunksize to use for saving memory
+        data_type(str): Wether to save sequences or sequence groups
     """
+    if data_type == "sequences":
+        count_key = "read_count_data"
+        sequence_key = "sequence_data"
+        index_key = "0"
+    elif data_type == "sequence_groups":
+        count_key = "sequence_group_read_count_data"
+        sequence_key = "sequence_group_data"
+        index_key = "1"
+
     read_count_data = dd.read_hdf(
         hdf_savename,
-        key="read_count_data",
+        key=count_key,
         columns=["hash_idx", "read_count"],
         chunksize=chunksize,
     )
@@ -237,7 +249,7 @@ def generate_fasta(project: str, hdf_savename: str, chunksize: int) -> None:
 
     # load the sequence data to generate the fasta file
     sequence_data = dd.read_hdf(
-        hdf_savename, key="sequence_data", chunksize=chunksize
+        hdf_savename, key=sequence_key, chunksize=chunksize
     ).reset_index()
 
     # merge on hash idx
@@ -253,7 +265,9 @@ def generate_fasta(project: str, hdf_savename: str, chunksize: int) -> None:
     # generate a savename for the fasta file
     fasta_savename = Path(project).joinpath(
         "11_read_table",
-        "sequences_{}.fasta".format(Path(project).stem.replace("_apscale", "")),
+        "{}_{}_{}.fasta".format(
+            index_key, data_type, Path(project).stem.replace("_apscale", "")
+        ),
     )
 
     # open the fasta file to write to
@@ -312,7 +326,6 @@ def generate_sequence_groups(
                 fasta_savename,
                 "--db",
                 fasta_savename,
-                "--self",
                 "--id",
                 str(group_threshold),
                 "--userout",
@@ -494,6 +507,7 @@ def generate_read_table(
     to_excel: bool,
     to_parquet: bool,
     fasta_data: object,
+    data_type: str,
 ) -> None:
     """Function to generate and save read tables to excel and or parquet
 
@@ -503,19 +517,30 @@ def generate_read_table(
         to_excel (bool): Wether or not to write to excel.
         to_parquet (bool): Wether or not to write to parquet.
         fasta_data (object): fasta data as dask dataframe. holds the sequence data in correct order, so can be used for read_table_generation
+        data_type (str): Wether to process sequences or sequence groups
     """
+    if data_type == "sequences":
+        count_key = "read_count_data"
+        sequence_key = "sequence_data"
+        index_key = "0"
+    elif data_type == "sequence_groups":
+        count_key = "sequence_group_read_count_data"
+        sequence_key = "sequence_group_data"
+        index_key = "1"
+
     formats = ["excel", "parquet"]
 
     # collect number of sequences and number of samples
     with pd.HDFStore(hdf_savename, mode="r") as store:
-        number_of_sequences = store.get_storer("sequence_data").nrows
+        number_of_sequences = store.get_storer(sequence_key).nrows
         number_of_samples = store.get_storer("sample_data").nrows
 
     # give user output, ignore the empty seq
     print(
-        "{}: Dataset contains {} unique sequences and {} samples.".format(
+        "{}: Dataset contains {} unique {} and {} samples.".format(
             datetime.datetime.now().strftime("%H:%M:%S"),
             number_of_sequences - 1,
+            data_type.replace("_", " "),
             number_of_samples,
         )
     )
@@ -540,7 +565,7 @@ def generate_read_table(
             hdf_savename, key="sample_data", chunksize=chunksize
         ).reset_index()
 
-        read_count_data = dd.read_hdf(hdf_savename, key="read_count_data")
+        read_count_data = dd.read_hdf(hdf_savename, key=count_key)
 
         # load the data in chunks
         for part_nr, part in enumerate(sample_data.to_delayed()):
@@ -567,7 +592,7 @@ def generate_read_table(
                 "read_count"
             ].fillna(0)
 
-            # pivot the table to create a classic samples x sequences OTU table
+            # pivot the table to create a classic samples x sequences table
             wide_read_table = sample_sequence_matrix.pivot_table(
                 index=["hash_idx", "hash", "seq"],
                 columns="sample_name",
@@ -600,8 +625,11 @@ def generate_read_table(
             if format == "excel" and setting:
                 savename = Path(project).joinpath(
                     "11_read_table",
-                    "{}_read_table_part_{}.xlsx".format(
-                        Path(project).stem.replace("_apscale", ""), part_nr
+                    "{}_{}_{}_read_table_part_{}.xlsx".format(
+                        index_key,
+                        Path(project).stem.replace("_apscale", ""),
+                        data_type,
+                        part_nr,
                     ),
                 )
 
@@ -611,12 +639,15 @@ def generate_read_table(
             if format == "parquet" and setting:
                 savename = Path(project).joinpath(
                     "11_read_table",
-                    "{}_read_table_part_{}.parquet.snappy".format(
-                        Path(project).stem.replace("_apscale", ""), part_nr
+                    "{}_{}_{}_read_table_part_{}.parquet.snappy".format(
+                        index_key,
+                        Path(project).stem.replace("_apscale", ""),
+                        data_type,
+                        part_nr,
                     ),
                 )
 
-                # save to excel
+                # save to parquet
                 wide_read_table.to_parquet(savename, index=False)
 
 
@@ -693,7 +724,7 @@ def sequence_groups_to_data_storage(
         hdf_savename, key="sequence_group_data", mode="a", compute=True
     )
 
-    # transform sequence group read count data to write the fasta and to push it to hdf
+    # transform sequence group read count data to write the fasta and to append it to hdf
     sequence_group_read_count_data = (
         sequence_group_read_count_data[["group_idx", "sample_idx", "read_count"]]
         .groupby(by=["group_idx", "sample_idx"])
@@ -770,18 +801,27 @@ def main(project=Path.cwd()):
     )
 
     # sort the hdf store to generate the fasta file, generate the fasta file
-    fasta_data, fasta_savename = generate_fasta(project, hdf_savename, 100_000)
+    fasta_data, fasta_savename = generate_fasta(
+        project, hdf_savename, 100_000, data_type="sequences"
+    )
 
     # create parquet and excel outputs from the hdf
     print(
-        "{}: Generating read table(s).".format(
+        "{}: Generating read table(s) for sequences.".format(
             datetime.datetime.now().strftime("%H:%M:%S")
         )
     )
 
     # generate the read tables if requests
     if perform:
-        generate_read_table(project, hdf_savename, to_excel, to_parquet, fasta_data)
+        generate_read_table(
+            project,
+            hdf_savename,
+            to_excel,
+            to_parquet,
+            fasta_data,
+            data_type="sequences",
+        )
 
     # generate sequence groups
     if group_threshold >= 1:
@@ -816,7 +856,37 @@ def main(project=Path.cwd()):
             chunksize=100_000,
         )
 
-        # update the data storage, generate user log, potentially generate read tables and fasta
+        # update the data storage, generate user log
         sequence_groups_to_data_storage(
             project, sequence_group_savename, hdf_savename, chunksize=100_000
         )
+
+        # generate fasta file for the sequence groups
+        print(
+            "{}: Saving sequence groups to fasta.".format(
+                datetime.datetime.now().strftime("%H:%M:%S")
+            )
+        )
+
+        # sort the hdf store to generate the fasta file, generate the fasta file
+        fasta_data, fasta_savename = generate_fasta(
+            project, hdf_savename, 100_000, data_type="sequence_groups"
+        )
+
+        # create parquet and excel outputs from the hdf
+        print(
+            "{}: Generating read table(s) for sequence groups.".format(
+                datetime.datetime.now().strftime("%H:%M:%S")
+            )
+        )
+
+        # generate read tables for the sequences groups
+        if perform:
+            generate_read_table(
+                project,
+                hdf_savename,
+                to_excel,
+                to_parquet,
+                fasta_data,
+                data_type="sequence_groups",
+            )

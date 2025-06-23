@@ -68,7 +68,7 @@ def add_data_to_read_storage(
         data_to_add,
         left_on="sample_name",
         right_on=sample_identifier,
-        how="inner",
+        how="left",
     ).drop(columns=[sample_identifier])
 
     # reset the index

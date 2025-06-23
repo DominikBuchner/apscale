@@ -1,12 +1,24 @@
-import subprocess, datetime, gzip, os, pickle, glob, shutil, re, hashlib, math, sys
+import subprocess, datetime, gzip, os, pickle, glob, shutil, re, hashlib, math, sys, powerlaw, contextlib
 import pandas as pd
 import numpy as np
-from math import ceil
-from scipy.stats import poisson
 from joblib import Parallel, delayed
 from pathlib import Path
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 from apscale.a_create_project import empty_file
+from collections import Counter
+
+
+# Custom context manager to suppress stdout
+# needed to supress prints from the power law package
+@contextlib.contextmanager
+def suppress_stdout():
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        sys.stdout = devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
 
 
 # function to count the total abundance of a fasta file
@@ -30,75 +42,53 @@ def get_total_abundance(file_path: str) -> tuple:
     return file_path, total_abundance
 
 
-# function to compute a dynamic cumulative threshold (cumulate reads until cutoff is met, exclude singletons)
-def get_cumulative_threshold(file_path: str, threshold: int) -> tuple:
-    """Function to compute a cumulative threshold for each fasta file.
-    E.g. Threshold % of that total read abundance is above. Singletons are excluded for this computation, since they are most likely errors anyways.
-    """
-    # gather sequence abundances here
-    sequence_abundances = []
-
-    # remove singletons before setting a threshold
-    with gzip.open(file_path, "rt") as in_stream:
-        for header, seq in SimpleFastaParser(in_stream):
-            size = int(header.split("size=")[-1])
-            if size > 1:
-                sequence_abundances.append(size)
-
-    # return a filter of one for empty files
-    if len(sequence_abundances) == 0:
-        return (file_path, 1)
-
-    # compute the total abundance * threshold
-    abundance_threshold = (threshold / 100) * sum(sequence_abundances)
-
-    abundance_sum = 0
-    final_threshold = 0
-
-    # determine the rank
-    for rank, abd in enumerate(sequence_abundances):
-        abundance_sum += abd
-        if abundance_sum > abundance_threshold:
-            # substract 1 to really have 90% of the data
-            final_threshold = sequence_abundances[rank] - 1
-            break
-
-    return file_path, final_threshold
-
-
-# function to compute a dynamic poisson derived threshold (poisson distribution for error modelling)
-def get_poisson_threshold(file_path: str, threshold: int) -> tuple:
-    """Function to compute a Poisson-based noise threshold for each fasta file individually.
+# function to compute the power law cutoff
+def get_power_law_cutoff(file_path: str) -> tuple:
+    """Function to compute the min_size parameters via a power law distribution.
+    --> Assumption that sequencing data follows a power law relationship: A few dominant signals, many rare signals + noise
 
     Args:
-        file_path (str): Path to the fasta file used for computation.
-        threshold (int): Threshold to cut off the distribution in %
+        file_path (str): Path to the input file.
 
     Returns:
-        tuple: Tuple with the fasta_path and the threshold to use for denoising.
+        tuple: Tuple in the form of (file_path, min_size)
     """
-    # gather sequence abundances here
-    sequence_abundances = []
+    # read the input file line by line and extract the abundance data
+    file = SimpleFastaParser(gzip.open(file_path, "rt"))
 
-    # remove singletons before setting a threshold
-    with gzip.open(file_path, "rt") as in_stream:
-        for header, seq in SimpleFastaParser(in_stream):
-            size = int(header.split("size=")[-1])
-            if size > 1:
-                sequence_abundances.append(size)
+    abundances = []
 
-    # return a filter of one for empty files
-    if len(sequence_abundances) == 0:
-        return (file_path, 1)
+    for header, _ in file:
+        size = header.split("size=")[-1]
+        abundances.append(size)
 
-    # compute poisson mean
-    lambda_poisson = np.mean(sequence_abundances)
+    # check if a large proportion > 25% of data points are singletons and doubletons -> only fit power law then, else return "normal" threshold of 4
+    seq_counts = Counter(abundances)
 
-    # compute the 95% percentile threshold
-    threshold = math.ceil(poisson.ppf(threshold / 100, lambda_poisson))
+    try:
+        prop = (seq_counts["1"] + seq_counts["2"]) / len(abundances)
+    except ZeroDivisionError:
+        return file_path, 4
 
-    # return the threshold
-    return file_path, threshold
+    abundances = np.array(abundances)
+
+    # fit the power law distribution
+    if prop > 0.25:
+        # only fit power law if we have enough values
+        if len(abundances) > 50 and len(np.unique(abundances)) >= 2:
+            with suppress_stdout():
+                fit = powerlaw.Fit(abundances)
+                # only return power law if it actually models the distribution well
+                _, p = fit.distribution_compare("power_law", "exponential")
+                if p < 0.05:
+                    if int(fit.power_law.xmin) >= 4:
+                        return file_path, int(fit.power_law.xmin)
+                    else:
+                        return file_path, 4
+                else:
+                    return file_path, 4
+        else:
+            return file_path, 4
 
 
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize
@@ -365,7 +355,7 @@ def main(project=Path.cwd()):
     )
 
     # check that the data for poisson or cumulative threshold computation is valid
-    if threshold_type == "poisson" or threshold_type == "cumulative":
+    if threshold_type == "power_law":
         derep_settings = pd.read_excel(
             Path(project).joinpath(
                 "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
@@ -373,9 +363,9 @@ def main(project=Path.cwd()):
             sheet_name="06_dereplication",
         )
         derep_min_size = derep_settings["minimum sequence abundance"].item()
-        if derep_min_size > 2 and perform == True:
+        if derep_min_size > 1 and perform == True:
             print(
-                "{}: Data driven minsize is only available if dereplication min size is 1 or 2. Please repeat dereplication with a valid value!".format(
+                "{}: Power law driven minsize is only available if dereplication min size is 1. Please repeat dereplication with a valid value!".format(
                     datetime.datetime.now().strftime("%H:%M:%S")
                 )
             )
@@ -425,13 +415,15 @@ def main(project=Path.cwd()):
             input = [(file, size) if size > 1 else (file, 1) for file, size in input]
         if threshold_type == "absolute":
             input = [(file, threshold) for file in input]
-        if threshold_type == "poisson":
-            input = Parallel(n_jobs=cores)(
-                delayed(get_poisson_threshold)(file, threshold) for file in input
+        if threshold_type == "power law":
+            print(
+                "{}: Fitting power law distribution to the each file and computing signal to noise cutoff.".format(
+                    datetime.datetime.now().strftime("%H:%M:%S")
+                )
             )
-        if threshold_type == "cumulative":
+            # compute the total abundance
             input = Parallel(n_jobs=cores)(
-                delayed(get_cumulative_threshold)(file, threshold) for file in input
+                delayed(get_power_law_cutoff)(file) for file in input
             )
 
         ## parallelize the denoising
