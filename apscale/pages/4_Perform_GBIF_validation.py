@@ -8,7 +8,7 @@ from shapely import wkt
 from shapely.geometry import Polygon
 
 gbif_species = dd.read_hdf(
-    "C:\\Users\\Dominik\\Nextcloud\\data_storage_ag_leese\\dominik_buchner\\Apscale modular Update\\bmon24_2_filter_fwh_apscale\\12_analyze\\data\\read_data_storage_bmon24_2_filter_fwh.h5.lz",
+    "C:\\Users\\Dominik\\Nextcloud3\\data_storage_ag_leese\\dominik_buchner\\Apscale modular Update\\bmon24_2_filter_fwh_apscale\\12_analyze\\data\\read_data_storage_bmon24_2_filter_fwh.h5.lz",
     key="gbif_taxonomy",
 )
 
@@ -17,7 +17,7 @@ gbif_species = gbif_species.dropna().reset_index()
 
 # load the readcount data
 read_count_data = dd.read_hdf(
-    "C:\\Users\\Dominik\\Nextcloud\\data_storage_ag_leese\\dominik_buchner\\Apscale modular Update\\bmon24_2_filter_fwh_apscale\\12_analyze\\data\\read_data_storage_bmon24_2_filter_fwh.h5.lz",
+    "C:\\Users\\Dominik\\Nextcloud3\\data_storage_ag_leese\\dominik_buchner\\Apscale modular Update\\bmon24_2_filter_fwh_apscale\\12_analyze\\data\\read_data_storage_bmon24_2_filter_fwh.h5.lz",
     key="read_count_data",
 )
 
@@ -28,7 +28,7 @@ read_count_data = read_count_data.merge(
 
 # add lon / lat data
 sample_metadata = dd.read_hdf(
-    "C:\\Users\\Dominik\\Nextcloud\\data_storage_ag_leese\\dominik_buchner\\Apscale modular Update\\bmon24_2_filter_fwh_apscale\\12_analyze\\data\\read_data_storage_bmon24_2_filter_fwh.h5.lz",
+    "C:\\Users\\Dominik\\Nextcloud3\\data_storage_ag_leese\\dominik_buchner\\Apscale modular Update\\bmon24_2_filter_fwh_apscale\\12_analyze\\data\\read_data_storage_bmon24_2_filter_fwh.h5.lz",
     key="sample_metadata",
 )
 
