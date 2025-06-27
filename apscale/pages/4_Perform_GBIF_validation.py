@@ -123,9 +123,25 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
     # load the readcount data
     read_count_data = dd.read_hdf(read_data_to_modify, key="read_count_data")
 
+    # compute the readsum data that is needed for sorting in the end
+    readsum_data = (
+        read_count_data.groupby(by=["hash_idx"])
+        .sum()
+        .reset_index()[["hash_idx", "read_count"]]
+    )
+
     # merge frames to only keep occurences of the gbif species
     read_count_data = read_count_data.merge(
         gbif_species, left_on="hash_idx", right_on="hash_idx", how="inner"
+    )
+
+    # add the sequence metadata to show hash values instead of idx, as idx is not sorted
+    sequence_metadata = dd.read_hdf(
+        read_data_to_modify, key="sequence_metadata", columns=["hash", "seq"]
+    )
+    sequence_metadata = sequence_metadata.reset_index()
+    read_count_data = read_count_data.merge(
+        sequence_metadata, left_on="hash_idx", right_on="hash_idx", how="left"
     )
 
     # add lon lat data
@@ -142,10 +158,29 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
 
     # group by hash_idx to collect the data for the polygon
     read_count_data = (
-        read_count_data.groupby(by=["hash_idx", "gbif_taxonomy"])["lon_lat"]
+        read_count_data.groupby(
+            by=["hash_idx", "gbif_taxonomy", "hash", "seq"], sort=False
+        )["lon_lat"]
         .apply(lambda x: list(x), meta=("lon_lat_list", "object"))
         .reset_index()
     )
+
+    meta = {
+        "hash_idx": "int64",
+        "gbif_taxonomy": "object",
+        "hash": "object",
+        "seq": "object",
+        "read_count": "int64",
+        "lon_lat_list": "object",
+    }
+
+    meta = read_count_data.head(1).iloc[0:0]
+    read_count_data = read_count_data.map_partitions(lambda x: x, meta=meta)
+
+    # add the readsum data to sort by it
+    read_count_data = read_count_data.merge(
+        readsum_data, left_on="hash_idx", right_on="hash_idx", how="left"
+    ).sort_values(by="read_count", axis=0, ascending=False)
 
     # define the meta for the output
     sample = read_count_data.head(1)
@@ -159,11 +194,11 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
 
     # only strings can be streamed to hdf
     read_count_data["gbif_taxonomy"] = read_count_data["gbif_taxonomy"].astype(str)
+    read_count_data["hash"] = read_count_data["hash"].astype(str)
+    read_count_data["seq"] = read_count_data["seq"].astype(str)
     read_count_data["lon_lat_list"] = read_count_data["lon_lat_list"].apply(
         json.dumps, meta=("lon_lat_list", "str")
     )
-
-    # print(read_count_data.compute())
 
     # save to hdf to use later for the validation of records
     read_count_data.to_hdf(
@@ -248,15 +283,16 @@ def main():
             gbif_taxonomy_distribution = dd.read_hdf(
                 st.session_state["read_data_to_modify"],
                 key="gbif_taxonomy_distribution",
-            )  # columns=["gbif_taxonomy"],
+                columns=["hash_idx", "gbif_taxonomy", "hash", "seq"],
+            )
 
             species_list = gbif_taxonomy_distribution.compute()
             st.write(species_list)
 
-            # st.selectbox(
-            #     label="Select a species annotation to plot on the map",
-            #     options=species_list,
-            # )
+            st.selectbox(
+                label="Select any hash idx to plot on the map",
+                options=species_list["hash_idx"],
+            )
 
 
 main()

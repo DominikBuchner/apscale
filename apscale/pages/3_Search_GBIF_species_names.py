@@ -42,7 +42,7 @@ def query_gbif(species_name: str) -> str:
     Returns:
         str: Species name from GBIF backbone
     """
-    api_resp = species.name_backbone(species_name)
+    api_resp = species.name_backbone(species_name, timeout=60)
 
     # try to fetch the new name if there is any, else return an empty string
     try:
