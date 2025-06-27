@@ -1,13 +1,14 @@
-import pyproj, json
+import pyproj, json, os
 import dask.dataframe as dd
 import streamlit as st
 import pandas as pd
 from pygbif import occurrences as occ
+from pathlib import Path
 from shapely.geometry import MultiPoint
 from shapely.ops import transform
 from shapely.geometry.polygon import orient
 from shapely import wkt
-from shapely.geometry import Polygon
+import numpy as np
 
 
 def check_metadata(read_data_to_modify: str) -> dict:
@@ -208,7 +209,57 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
         format="table",
     )
 
-    # also create a duckdb database for lookups
+
+def extract_map_data(read_data_to_modify: object, hash_idx: int) -> object:
+    """Function to extract map data for a given hash_idx to perform some basic plotting
+
+    Args:
+        read_data_to_modify (object): Read store to work in.
+        hash_idx (int): The hash_idx to return a dataframe for.
+
+    Returns:
+        object: A dataframe that can be used for plotting
+    """
+    hash_idx_data = dd.read_hdf(
+        read_data_to_modify,
+        key="gbif_taxonomy_distribution",
+        columns=["hash_idx", "lon_lat_list", "polygon_wkt"],
+    )
+    hash_idx_data = hash_idx_data[hash_idx_data["hash_idx"] == hash_idx].compute()
+
+    # compute the dataframe and then transform it correctly
+    hash_idx_data["lon_lat_list"] = hash_idx_data["lon_lat_list"].apply(
+        lambda x: json.loads(x)
+    )
+
+    # restore the points from the wkt polygon
+    hash_idx_data["polygon_wkt"] = hash_idx_data["polygon_wkt"].apply(
+        lambda x: list(wkt.loads(x).exterior.coords)
+    )
+
+    # handle lon lad and polygon data seperatly
+    occurence_data = hash_idx_data[["hash_idx", "lon_lat_list"]].explode("lon_lat_list")
+    occurence_data["label"] = "occurence"
+    occurence_data[["lon", "lat"]] = pd.DataFrame(
+        occurence_data["lon_lat_list"].tolist(), index=occurence_data.index
+    )
+    occurence_data = occurence_data.drop(columns="lon_lat_list")
+
+    distribution_data = hash_idx_data[["hash_idx", "polygon_wkt"]].explode(
+        "polygon_wkt"
+    )
+    distribution_data["label"] = "distribution"
+    distribution_data[["lon", "lat"]] = pd.DataFrame(
+        distribution_data["polygon_wkt"].tolist(), index=distribution_data.index
+    )
+    distribution_data = distribution_data.drop(columns="polygon_wkt")
+
+    # concat the map data, assign colors
+    map_data = pd.concat([occurence_data, distribution_data], ignore_index=True)
+    color_dict = {"occurence": "#800000", "distribution": "#008000"}
+    map_data["color"] = map_data["label"].map(color_dict)
+
+    return map_data
 
 
 def main():
@@ -287,12 +338,21 @@ def main():
             )
 
             species_list = gbif_taxonomy_distribution.compute()
+            st.write("Detected data:")
             st.write(species_list)
 
-            st.selectbox(
+            idx_to_plt = st.selectbox(
                 label="Select any hash idx to plot on the map",
                 options=species_list["hash_idx"],
             )
+
+            # load the map data
+            map_data = extract_map_data(
+                st.session_state["read_data_to_modify"], hash_idx=idx_to_plt
+            )
+
+            if not map_data.empty:
+                st.map(map_data, latitude="lat", longitude="lon", color="color")
 
 
 main()
