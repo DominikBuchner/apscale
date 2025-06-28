@@ -1,4 +1,4 @@
-import pyproj, json, os
+import pyproj, json, time
 import dask.dataframe as dd
 import streamlit as st
 import pandas as pd
@@ -200,6 +200,7 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
     read_count_data["lon_lat_list"] = read_count_data["lon_lat_list"].apply(
         json.dumps, meta=("lon_lat_list", "str")
     )
+    read_count_data["radius"] = radius
 
     # save to hdf to use later for the validation of records
     read_count_data.to_hdf(
@@ -262,6 +263,102 @@ def extract_map_data(read_data_to_modify: object, hash_idx: int) -> object:
     return map_data
 
 
+def perform_gbif_validation(read_data_to_modify: object):
+    """Function to perform the GBIF validation for all records.
+
+    Args:
+        read_data_to_modify (object): Path to the HDF read store.
+    """
+    gbif_distribution_data = dd.read_hdf(
+        read_data_to_modify,
+        key="gbif_taxonomy_distribution",
+        chunksize=1,
+        columns=["hash_idx", "gbif_taxonomy", "polygon_wkt"],
+    )
+
+    # display the progress bar on the main page
+    pbar = st.progress(0, text="Validating via GBIF.")
+    nr_of_queries = gbif_distribution_data.npartitions
+
+    results = []
+
+    # for i, line in enumerate(gbif_distribution_data.to_delayed()):
+    #     # compute the values for that line
+    #     line = line.compute()
+    #     hash_idx, species, polygon = (
+    #         line["hash_idx"].item(),
+    #         line["gbif_taxonomy"].item(),
+    #         line["polygon_wkt"].item(),
+    #     )
+    #     # perform the api call
+    #     validation_result = occ.search(
+    #         scientificName=species, geometry=polygon, timeout=60
+    #     )
+    #     results.append((hash_idx, True if validation_result["count"] > 0 else False))
+    #     progress = int((i + 1) / nr_of_queries * 100)
+    #     pbar.progress(progress, text=f"Processing {hash_idx}: {species}")
+
+    # transform to dataframe, save to hdf
+    results = pd.DataFrame(results, columns=["hash_idx", "gbif_validation"])
+    results.to_hdf(
+        read_data_to_modify,
+        key="gbif_validation_species",
+        mode="a",
+        format="table",
+    )
+
+    st.success("GBIF validation results successfully saved.")
+
+    # map the results also for the species groups if there are any
+    with pd.HDFStore(read_data_to_modify, mode="r") as store:
+        groups_present = False
+        if "/sequence_group_data" in store.keys():
+            groups_present = True
+
+    # give user output
+    if groups_present:
+        st.warning(
+            "Species groups detected in the dataset. Deriving GBIF validation for species groups.",
+            icon="ℹ️",
+        )
+
+        # derive for sequence groups, load the group mappings first
+        group_mapping_path = read_data_to_modify.parents[2].joinpath(
+            "11_read_table", "data", "group_mapping.csv"
+        )
+
+        # load gbif validation species and groups, add group annotation
+        gbif_validation_species = dd.read_hdf(
+            read_data_to_modify, key="gbif_validation_species"
+        )
+
+        group_mapping = dd.read_csv(
+            group_mapping_path,
+            sep="\t",
+            names=["hash_idx", "hash", "seq", "group_idx"],
+            usecols=["hash_idx", "group_idx"],
+        )
+
+        # merge the two frames to have the groups in the gbif validation
+        gbif_validation_sequence_groups = gbif_validation_species.merge(
+            group_mapping, left_on="hash_idx", right_on="hash_idx", how="left"
+        )
+
+        gbif_validation_sequence_groups = (
+            gbif_validation_sequence_groups[["group_idx", "gbif_validation"]]
+            .groupby(by="group_idx")["gbif_validation"]
+            .sum()
+            .reset_index()
+        )
+
+        # transform back to boolean, rename column
+        gbif_validation_sequence_groups["gbif_validation"] = (
+            gbif_validation_sequence_groups["gbif_validation"] > 0
+        )
+
+        print(gbif_validation_sequence_groups.compute())
+
+
 def main():
     # header
     st.title("Validate species names via GBIF record search")
@@ -316,7 +413,7 @@ def main():
         )
 
         compute_distributions = st.button(
-            label="Compute species distributions", type="primary"
+            label="Compute / Update species distributions", type="primary"
         )
 
         if compute_distributions:
@@ -334,7 +431,7 @@ def main():
             gbif_taxonomy_distribution = dd.read_hdf(
                 st.session_state["read_data_to_modify"],
                 key="gbif_taxonomy_distribution",
-                columns=["hash_idx", "gbif_taxonomy", "hash", "seq"],
+                columns=["hash_idx", "radius", "gbif_taxonomy", "hash", "seq"],
             )
 
             species_list = gbif_taxonomy_distribution.compute()
@@ -353,6 +450,17 @@ def main():
 
             if not map_data.empty:
                 st.map(map_data, latitude="lat", longitude="lon", color="color")
+
+            # perform the GBIF validation
+            perform_validation = st.button(
+                "Validate all species via GBIF API",
+                type="primary",
+                help="This function checks if there are any observations for the given species list within the selected radius. May take some time.",
+            )
+
+            if perform_validation:
+                # function to perform the validation. Adds validation data to the read store
+                perform_gbif_validation(st.session_state["read_data_to_modify"])
 
 
 main()
