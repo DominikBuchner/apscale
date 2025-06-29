@@ -282,21 +282,21 @@ def perform_gbif_validation(read_data_to_modify: object):
 
     results = []
 
-    # for i, line in enumerate(gbif_distribution_data.to_delayed()):
-    #     # compute the values for that line
-    #     line = line.compute()
-    #     hash_idx, species, polygon = (
-    #         line["hash_idx"].item(),
-    #         line["gbif_taxonomy"].item(),
-    #         line["polygon_wkt"].item(),
-    #     )
-    #     # perform the api call
-    #     validation_result = occ.search(
-    #         scientificName=species, geometry=polygon, timeout=60
-    #     )
-    #     results.append((hash_idx, True if validation_result["count"] > 0 else False))
-    #     progress = int((i + 1) / nr_of_queries * 100)
-    #     pbar.progress(progress, text=f"Processing {hash_idx}: {species}")
+    for i, line in enumerate(gbif_distribution_data.to_delayed()):
+        # compute the values for that line
+        line = line.compute()
+        hash_idx, species, polygon = (
+            line["hash_idx"].item(),
+            line["gbif_taxonomy"].item(),
+            line["polygon_wkt"].item(),
+        )
+        # perform the api call
+        validation_result = occ.search(
+            scientificName=species, geometry=polygon, timeout=60
+        )
+        results.append((hash_idx, True if validation_result["count"] > 0 else False))
+        progress = int((i + 1) / nr_of_queries * 100)
+        pbar.progress(progress, text=f"Processing {hash_idx}: {species}")
 
     # transform to dataframe, save to hdf
     results = pd.DataFrame(results, columns=["hash_idx", "gbif_validation"])
@@ -355,11 +355,32 @@ def perform_gbif_validation(read_data_to_modify: object):
         gbif_validation_sequence_groups["gbif_validation"] = (
             gbif_validation_sequence_groups["gbif_validation"] > 0
         )
+        gbif_validation_sequence_groups = gbif_validation_sequence_groups.rename(
+            columns={"group_idx": "hash_idx"}
+        )
 
-        print(gbif_validation_sequence_groups.compute())
+        gbif_validation_sequence_groups.to_hdf(
+            read_data_to_modify,
+            key="gbif_validation_species_groups",
+            mode="a",
+            format="table",
+        )
+
+        st.success("GBIF validation results for species groups successfully saved.")
 
 
 def main():
+    # prevent page from scroling up on click
+    st.markdown(
+        """
+    <style>
+        * {
+        overflow-anchor: none !important;
+        }
+    </style>""",
+        unsafe_allow_html=True,
+    )
+
     # header
     st.title("Validate species names via GBIF record search")
     st.write("This module needs sample metadata (lat, lon) for each sample.")
@@ -464,7 +485,3 @@ def main():
 
 
 main()
-
-#         string = "POLYGON((8.2 46.3, 8.8 46.3, 9.1 46.4, 7.1 48.6, 8.2 46.3))"
-#         test = occ.search(scientificName=species, geometry=buffered_geo.wkt, timeout=30)
-#         print(species, len(test["results"]))

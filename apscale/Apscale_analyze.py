@@ -127,6 +127,25 @@ def main(project=Path.cwd()):
     st.write(
         f"This project currently contains **{sample_metadata_cols} sample metadata columns** and **{sequence_metadata_cols} sequence metadata columns**."
     )
+
+    # add optional data (GBIF species names, GBIF validation)
+    with pd.HDFStore(st.session_state["read_data_to_modify"], mode="r") as store:
+        keys = {
+            "/gbif_taxonomy": "not performed",
+            "/gbif_validation_species": "not performed",
+            "/gbif_validation_species_groups": "not performed",
+        }
+
+        for key in keys.keys():
+            if key in store.keys():
+                keys[key] = "performed"
+
+        message = f"""GBIF taxonomy module **was {keys["/gbif_taxonomy"]}**.  
+        GBIF validation for species **was {keys["/gbif_validation_species"]}**.  
+        GBIF validation for species groups **was {keys["/gbif_validation_species_groups"]}**."""
+
+        st.write(message)
+
     # add a divier to reset all metadata
     st.divider()
 
