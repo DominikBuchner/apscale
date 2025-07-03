@@ -108,8 +108,10 @@ def filter_sequence_metadata(read_data_to_modify: object) -> object:
 
 
 def create_data_split(read_data_to_modify):
-    sample_metadata = dd.read_hdf(read_data_to_modify, key="sample_metadata")
-    print(sample_metadata.head(10))
+    sample_metadata = dd.read_hdf(
+        read_data_to_modify, key="sample_metadata"
+    ).columns.to_list()
+    print(sample_metadata)
     pass
 
 
