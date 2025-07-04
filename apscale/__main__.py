@@ -1,8 +1,9 @@
-import argparse, sys, subprocess, duckdb
+import argparse, sys, subprocess
+import importlib.util
+import apscale
 from pathlib import Path
 from apscale import (
     a_create_project,
-    Apscale_analyze,
     b_pe_merging,
     c_primer_trimming,
     d_quality_filtering,
@@ -234,15 +235,30 @@ def main():
         else:
             j_generate_read_table.main(args.generate_read_table)
 
+    # dev only part
+    # apscale_base = Path(apscale.__file__).resolve().parent
+    # analyze_script = apscale_base.joinpath("Apscale_analyze.py")
+
+    # for users
+    spec = importlib.util.find_spec("apscale")
+    apscale_path = Path(spec.origin).parent
+    apscale_analyze = apscale_path.joinpath("Apscale_analyze.py")
+
     if "analyze" in args:
         if not args.analyze:
-            subprocess.run(
-                "streamlit run C:\\Users\\Dominik\\Documents\\GitHub\\apscale\\apscale\\Apscale_analyze.py"
-            )
+            subprocess.run(["streamlit", "run", str(apscale_analyze)])
         else:
             path = Path(args.analyze)
             subprocess.run(
-                f'streamlit run C:\\Users\\Dominik\\Documents\\GitHub\\apscale\\apscale\\Apscale_analyze.py -- "{path}"'
+                subprocess.run(
+                    [
+                        "streamlit",
+                        "run",
+                        str(apscale_analyze),
+                        "--",
+                        str(path),
+                    ]
+                )
             )
 
     ## print help if no argument is provided

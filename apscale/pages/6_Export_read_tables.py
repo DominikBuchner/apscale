@@ -1,5 +1,8 @@
 import streamlit as st
 import dask.dataframe as dd
+import pandas as pd
+from pathlib import Path
+import os
 
 
 def filter_sequence_metadata(read_data_to_modify: object) -> object:
@@ -15,29 +18,45 @@ def filter_sequence_metadata(read_data_to_modify: object) -> object:
     sequence_metadata = dd.read_hdf(read_data_to_modify, key="sequence_metadata")
 
     # add gbif taxonomy
-    gbif_taxonomy = dd.read_hdf(read_data_to_modify, key="gbif_taxonomy")
-    gbif_taxonomy = gbif_taxonomy.dropna().reset_index()
-    sequence_metadata = sequence_metadata.merge(
-        gbif_taxonomy, left_on="hash_idx", right_on="hash_idx", how="left"
-    )
+    try:
+        gbif_taxonomy = dd.read_hdf(read_data_to_modify, key="gbif_taxonomy")
+        gbif_taxonomy = gbif_taxonomy.dropna().reset_index()
+        sequence_metadata = sequence_metadata.merge(
+            gbif_taxonomy, left_on="hash_idx", right_on="hash_idx", how="left"
+        )
+    except KeyError:
+        pass
 
-    # add gbif validation for sequences and sequence_groups
-    gbif_validation_species = dd.read_hdf(
-        read_data_to_modify, key="gbif_validation_species"
-    )
-    gbif_validation_groups = dd.read_hdf(
-        read_data_to_modify, key="gbif_validation_species_groups"
-    )
+    try:
+        # add gbif validation for sequences and sequence_groups
+        gbif_validation_species = dd.read_hdf(
+            read_data_to_modify, key="gbif_validation_species"
+        )
+        # merge both to the sequence metadata
+        sequence_metadata = sequence_metadata.merge(
+            gbif_validation_species, left_on="hash_idx", right_on="hash_idx", how="left"
+        ).rename(columns={"gbif_validation": "gbif_validation_species"})
+        # for saving in parquet cannot have mixed bool columns
+        sequence_metadata["gbif_validation_species"] = sequence_metadata[
+            "gbif_validation_species"
+        ].astype(str)
+    except KeyError:
+        pass
 
-    # merge both to the sequence metadata
-    sequence_metadata = sequence_metadata.merge(
-        gbif_validation_species, left_on="hash_idx", right_on="hash_idx", how="left"
-    ).rename(columns={"gbif_validation": "gbif_validation_species"})
+    try:
+        gbif_validation_groups = dd.read_hdf(
+            read_data_to_modify, key="gbif_validation_species_groups"
+        )
 
-    # merge both to the sequence metadata
-    sequence_metadata = sequence_metadata.merge(
-        gbif_validation_groups, left_on="hash_idx", right_on="hash_idx", how="left"
-    ).rename(columns={"gbif_validation": "gbif_validation_species_groups"})
+        # merge both to the sequence metadata
+        sequence_metadata = sequence_metadata.merge(
+            gbif_validation_groups, left_on="hash_idx", right_on="hash_idx", how="left"
+        ).rename(columns={"gbif_validation": "gbif_validation_species_groups"})
+        sequence_metadata["gbif_validation_species_groups"] = sequence_metadata[
+            "gbif_validation_species_groups"
+        ].astype(str)
+    except KeyError:
+        pass
 
     # let the user select columns to filter
     columns_to_filter = st.multiselect("Apply filter to:", sequence_metadata.columns)
@@ -184,6 +203,7 @@ def export_read_tables(
     hash_idx_order = hash_idx_order.assign(order=1)
     hash_idx_order["order"] = hash_idx_order["order"].cumsum() - 1
     hash_idx_order = hash_idx_order.drop("read_count", axis=1)
+    hash_idx_order = hash_idx_order.compute()
 
     # create a filtering for all subframes if splitting is enabled
     if sample_split:
@@ -208,6 +228,9 @@ def export_read_tables(
         frames = [read_count_data]
         folder_names = ["read_table"]
 
+    # the read tables will be saved here
+    save_folder = Path(read_data_to_modify).parents[1]
+
     # start computing the actual read tables
     for frame, folder in zip(frames, folder_names):
         # find out how many samples are in the current frame
@@ -226,11 +249,88 @@ def export_read_tables(
         # go over the individual partitions and create read tables
         for idx, frame_part in enumerate(frame.to_delayed()):
             # load the samples for that chunk
-            frame_df = dd.from_delayed(frame_part)[
-                ["sample_idx", "sample_name"]
+            frame_df = (
+                dd.from_delayed(frame_part)[["sample_idx", "sample_name"]]
+                .drop_duplicates()
+                .compute()
+            )
+
+            # compute all sequence data to generate the current sub table
+            all_sequence_data = sequence_metadata.compute()
+
+            sample_sequence_matrix = pd.merge(frame_df, all_sequence_data, how="cross")
+
+            # fetch the read counts for the current part
+            read_counts_part = read_count_data[
+                read_count_data["sample_idx"].isin(frame_part["sample_idx"])
             ].compute()
 
-            # continue here!
+            # merge the readcounts into the sample sequence matrix
+            sample_sequence_matrix = sample_sequence_matrix.merge(
+                read_counts_part[["sample_idx", "hash_idx", "read_count"]],
+                on=["sample_idx", "hash_idx"],
+                how="left",
+            )
+
+            # fill missing values with 0
+            sample_sequence_matrix["read_count"] = (
+                sample_sequence_matrix["read_count"].fillna(0).astype(int)
+            )
+
+            # find out which columns to use for pivot
+            pivot_index = [
+                col
+                for col in sample_sequence_matrix.columns.to_list()
+                if col not in ["sample_idx", "sample_name", "read_count"]
+            ]
+
+            sample_sequence_matrix[pivot_index] = sample_sequence_matrix[
+                pivot_index
+            ].fillna("")
+
+            # pivot the table to create a classic samples x sequences table
+            wide_read_table = sample_sequence_matrix.pivot_table(
+                index=pivot_index,
+                columns="sample_name",
+                values="read_count",
+                fill_value=0,
+            )
+
+            # flatten the column index, reset index for saving
+            wide_read_table.columns.name = None
+            wide_read_table = wide_read_table.reset_index()
+
+            # add the sorting table to sort the read table correctly
+            wide_read_table = wide_read_table.merge(
+                hash_idx_order,
+                left_on="hash_idx",
+                right_on="hash_idx",
+                how="left",
+            )
+
+            # sort the table, drop the empty seq
+            wide_read_table = (
+                wide_read_table.sort_values(by="order", axis=0)
+                .drop(labels=["hash_idx", "order"], axis=1)
+                .head(-1)
+            )
+
+            # create an output folder for the export
+            output_folder = save_folder.joinpath(folder)
+            output_folder.mkdir(parents=False, exist_ok=True)
+
+            # write the output file
+            if output_format == "Excel":
+                output_file = output_folder.joinpath(f"{folder}_read_table.xlsx")
+                wide_read_table.to_excel(output_file, index=False)
+            else:
+                output_file = output_folder.joinpath(
+                    f"{folder}_read_table.parquet.snappy"
+                )
+                wide_read_table.to_parquet(output_file)
+
+            # update the status
+            st.toast(f"{output_file.name} has been saved.")
 
 
 def main():
@@ -300,14 +400,15 @@ def main():
 
     if export:
         # export read tables in the apscale analyze folder
-        export_read_tables(
-            st.session_state["read_data_to_modify"],
-            sequence_metadata,
-            sample_splits,
-            metadata_to_export,
-            output_sequence_type,
-            output_file_format,
-        )
+        with st.spinner("Computing read tables. Hang on."):
+            export_read_tables(
+                st.session_state["read_data_to_modify"],
+                sequence_metadata,
+                sample_splits,
+                metadata_to_export,
+                output_sequence_type,
+                output_file_format,
+            )
 
 
 main()
