@@ -148,7 +148,89 @@ def export_read_tables(
         sequence_type (str): Wether to export sequences or sequence groups.
         output_format (str): String that defines the output format
     """
-    print(read_data_to_modify)
+    # load the respective count data
+    if sequence_type == "sequences":
+        read_count_data = dd.read_hdf(read_data_to_modify, key="read_count_data")
+    else:
+        read_count_data = dd.read_hdf(
+            read_data_to_modify, key="sequence_group_read_count_data"
+        )
+
+    # add the hash_idx manually
+    metadata_to_export = ["hash_idx"] + metadata_to_export
+
+    # only keep the selected columns
+    sequence_metadata = sequence_metadata[metadata_to_export]
+
+    # merge with the filtered sequence metadata
+    read_count_data = read_count_data.merge(
+        sequence_metadata, left_on="hash_idx", right_on="hash_idx", how="right"
+    ).dropna(subset=["sample_idx"])
+
+    # merge with the sample metadata
+    sample_metadata = dd.read_hdf(read_data_to_modify, key="sample_metadata")
+    read_count_data = read_count_data.merge(
+        sample_metadata, left_on="sample_idx", right_on="sample_idx", how="left"
+    )
+
+    # compute data needed for sorting
+    hash_idx_order = read_count_data[["hash_idx", "read_count"]]
+    hash_idx_order = (
+        hash_idx_order.groupby(["hash_idx"])
+        .sum()
+        .reset_index()
+        .sort_values("read_count", ascending=False)
+    )
+    hash_idx_order = hash_idx_order.assign(order=1)
+    hash_idx_order["order"] = hash_idx_order["order"].cumsum() - 1
+    hash_idx_order = hash_idx_order.drop("read_count", axis=1)
+
+    # create a filtering for all subframes if splitting is enabled
+    if sample_split:
+        masks = []
+        for sub_table in sample_split:
+            mask = None
+            for column, condition in sub_table.items():
+                col_mask = read_count_data[column] == condition
+                mask = col_mask if mask is None else mask & col_mask
+            masks.append(mask)
+        frames = [read_count_data[mask] for mask in masks]
+
+        # generate folder names here, as they correspond directly to the maskes
+        folder_names = []
+        for sub_table in sample_split:
+            name = []
+            for column, condition in sub_table.items():
+                name.append("_".join([column, condition]))
+            folder_names.append(name)
+        folder_names = ["-".join(name) for name in folder_names]
+    else:
+        frames = [read_count_data]
+        folder_names = ["read_table"]
+
+    # start computing the actual read tables
+    for frame, folder in zip(frames, folder_names):
+        # find out how many samples are in the current frame
+        n_samples = frame[["sample_idx", "sample_name"]].drop_duplicates()
+
+        # compute the batch size to repartition frames if needed
+        if output_format == "Excel":
+            n_chunks = 10_000_000 // len(hash_idx_order)
+            n_chunks = len(n_samples) // n_chunks + 1
+        if output_format == "Parquet":
+            n_chunks = 100_000_000 // len(hash_idx_order)
+            n_chunks = len(n_samples) // n_chunks + 1
+
+        frame = frame.repartition(npartitions=n_chunks)
+
+        # go over the individual partitions and create read tables
+        for idx, frame_part in enumerate(frame.to_delayed()):
+            # load the samples for that chunk
+            frame_df = dd.from_delayed(frame_part)[
+                ["sample_idx", "sample_name"]
+            ].compute()
+
+            # continue here!
 
 
 def main():
@@ -199,16 +281,19 @@ def main():
     output_sequence_type = st.radio(
         label="Choose sequence type",
         options=["sequences", "sequence groups"],
-        index=1,
+        index=0,
         horizontal=True,
         key="sequence_type",
     )
 
+    # remove hash idx from the output column, as it must be present anyways
+    column_choices = [col for col in sequence_metadata.columns if col != "hash_idx"]
+
     # sequence metadata to include in output table
     metadata_to_export = st.multiselect(
         label="Select sequence metadata to include in the output table",
-        options=sequence_metadata.columns,
-        default=sequence_metadata.columns,
+        options=column_choices,
+        default=column_choices,
     )
 
     export = st.button(label="Export read tables", type="primary")
