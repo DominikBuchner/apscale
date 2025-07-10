@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="apscale",
-    version="4.0.3",
+    version="4.0.0",
     author="Dominik Buchner",
     author_email="dominik.buchner524@googlemail.com",
     description="Advanced Pipeline for Simple yet Comprehensive AnaLysEs of DNA metabarcoding data",
@@ -23,7 +23,7 @@ setuptools.setup(
         "demultiplexer2 >= 1.1.5",
         "joblib >= 1.0.0",
         "biopython >= 1.85",
-        "cutadapt >= 3.5",
+        "cutadapt >= 5.0",
         "tqdm >= 4.56.0",
         "fastparquet >= 0.8.0",
         "numpy >= 2.3.1",
