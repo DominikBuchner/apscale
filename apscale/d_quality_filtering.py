@@ -17,7 +17,9 @@ def quality_filtering(
     sample_name_out = "{}_filtered.fasta.gz".format(
         Path(file).with_suffix("").with_suffix("").name
     )
-    output_path = Path(project).joinpath("5_quality_filtering", "data", sample_name_out)
+    output_path = Path(project).joinpath(
+        "05_quality_filtering", "data", sample_name_out
+    )
 
     # run vsearch --fastq_filter to apply the quality filtering
     # use --log because for some reason no info is written to stderr with this command
@@ -37,7 +39,7 @@ def quality_filtering(
                     str(0),
                     "--log",
                     Path(project).joinpath(
-                        "5_quality_filtering", "temp", "{}.txt".format(sample_name_out)
+                        "05_quality_filtering", "temp", "{}.txt".format(sample_name_out)
                     ),
                     "--fastq_maxee",
                     str(maxee),
@@ -61,7 +63,7 @@ def quality_filtering(
         ## collect processed and passed reads from the log file
         with open(
             Path(project).joinpath(
-                "5_quality_filtering", "temp", "{}.txt".format(sample_name_out)
+                "05_quality_filtering", "temp", "{}.txt".format(sample_name_out)
             )
         ) as log_file:
             content = log_file.read()
@@ -70,7 +72,7 @@ def quality_filtering(
                 int(re.findall(r"(\d+) sequences discarded", content)[0]),
             )
             reads = int(kept) + int(discarded)
-            version = re.findall("vsearch ([\w\.]*)", content)[0]
+            version = re.findall(r"vsearch ([\w\.]*)", content)[0]
     else:
         # generate data for logging if input is empty
         with gzip.open(output_path, "wb"):
@@ -103,7 +105,7 @@ def quality_filtering(
     ## temporarily pickle output for the log file, get vsearch version
     with open(
         Path(project).joinpath(
-            "5_quality_filtering", "temp", "{}.pkl".format(sample_name_out)
+            "05_quality_filtering", "temp", "{}.pkl".format(sample_name_out)
         ),
         "wb",
     ) as log:
@@ -132,7 +134,7 @@ def main(project=Path.cwd()):
         Path(project).joinpath(
             "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
         ),
-        sheet_name="5_quality_filtering",
+        sheet_name="05_quality_filtering",
     )
 
     # check is the settings are setup correctly
@@ -152,7 +154,7 @@ def main(project=Path.cwd()):
 
     ## collect the input files from primer trimming step
     input = glob.glob(
-        str(Path(project).joinpath("4_primer_trimming", "data", "*.fastq.gz"))
+        str(Path(project).joinpath("04_primer_trimming", "data", "*.fastq.gz"))
     )
 
     print(
@@ -163,7 +165,7 @@ def main(project=Path.cwd()):
 
     ## create temporal output folder
     try:
-        os.mkdir(Path(project).joinpath("5_quality_filtering", "temp"))
+        os.mkdir(Path(project).joinpath("05_quality_filtering", "temp"))
     except FileExistsError:
         pass
 
@@ -182,7 +184,7 @@ def main(project=Path.cwd()):
 
     ## write logfile from pkl log, remove single logs after
     summary_logs = glob.glob(
-        str(Path(project).joinpath("5_quality_filtering", "temp", "*.pkl"))
+        str(Path(project).joinpath("05_quality_filtering", "temp", "*.pkl"))
     )
     summary = [pickle.load(open(line, "rb")) for line in summary_logs]
 
@@ -199,10 +201,10 @@ def main(project=Path.cwd()):
     log_df = log_df.sort_values(by="File")
     log_df.to_excel(
         Path(project).joinpath(
-            "5_quality_filtering", "Logfile_5_quality_filtering.xlsx"
+            "05_quality_filtering", "Logfile_05_quality_filtering.xlsx"
         ),
         index=False,
-        sheet_name="5_quality_filtering",
+        sheet_name="05_quality_filtering",
     )
 
     ## add log to the project report
@@ -214,10 +216,10 @@ def main(project=Path.cwd()):
         if_sheet_exists="replace",
         engine="openpyxl",
     ) as writer:
-        log_df.to_excel(writer, sheet_name="5_quality_filtering", index=False)
+        log_df.to_excel(writer, sheet_name="05_quality_filtering", index=False)
 
     ## remove temporary files
-    shutil.rmtree(Path(project).joinpath("5_quality_filtering", "temp"))
+    shutil.rmtree(Path(project).joinpath("05_quality_filtering", "temp"))
 
 
 if __name__ == "__main__":

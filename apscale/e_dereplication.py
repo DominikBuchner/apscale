@@ -6,7 +6,7 @@ from apscale.a_create_project import empty_file
 
 
 ## dereplication function to dereplicate a gzipped fasta file
-def dereplication(file, project=None, comp_lvl=None):
+def dereplication(file, project=None, comp_lvl=None, minimum_seq_abundance=None):
     """Function to dereplicate a gzipped fasta file. Abundance annotations will be
     written to the output fasta."""
 
@@ -15,7 +15,7 @@ def dereplication(file, project=None, comp_lvl=None):
     sample_name_out = "{}_dereplicated.fasta.gz".format(
         Path(file).with_suffix("").with_suffix("").name
     )
-    output_path = Path(project).joinpath("6_dereplication", "data", sample_name_out)
+    output_path = Path(project).joinpath("06_dereplication", "data", sample_name_out)
 
     ## run vsearch --derep_fulllength to dereplicate the file
     ## use --log because for some reason no info is written to stderr with this command
@@ -28,6 +28,8 @@ def dereplication(file, project=None, comp_lvl=None):
                     "vsearch",
                     "--fastx_uniques",
                     Path(file),
+                    "--minuniquesize",
+                    str(minimum_seq_abundance),
                     "--fastaout",
                     "-",
                     "--quiet",
@@ -35,7 +37,7 @@ def dereplication(file, project=None, comp_lvl=None):
                     str(0),
                     "--log",
                     Path(project).joinpath(
-                        "6_dereplication", "temp", "{}.txt".format(sample_name_out)
+                        "06_dereplication", "temp", "{}.txt".format(sample_name_out)
                     ),
                     "--sizeout",
                     "--relabel",
@@ -54,15 +56,21 @@ def dereplication(file, project=None, comp_lvl=None):
         ## collect processed and passed reads from the log file
         with open(
             Path(project).joinpath(
-                "6_dereplication", "temp", "{}.txt".format(sample_name_out)
+                "06_dereplication", "temp", "{}.txt".format(sample_name_out)
             )
         ) as log_file:
             content = log_file.read()
-            seqs, unique_seqs = (
-                int(re.findall(r"(\d+) seqs", content)[0]),
-                int(re.findall(r"(\d+) unique sequences", content)[0]),
-            )
-            version = re.findall("vsearch ([\w\.]*)", content)[0]
+            if minimum_seq_abundance > 1:
+                seqs, unique_seqs = (
+                    int(re.findall(r"(\d+) seqs", content)[0]),
+                    int(re.findall(r"(\d+) uniques written", content)[0]),
+                )
+            else:
+                seqs, unique_seqs = (
+                    int(re.findall(r"(\d+) seqs", content)[0]),
+                    int(re.findall(r"(\d+) unique sequences", content)[0]),
+                )
+            version = re.findall(r"vsearch ([\w\.]*)", content)[0]
     else:
         with gzip.open(output_path, "wb"):
             seqs, unique_seqs, version = 0, 0, "empty input"
@@ -82,7 +90,7 @@ def dereplication(file, project=None, comp_lvl=None):
     ## temporarily pickle output for the log file
     with open(
         Path(project).joinpath(
-            "6_dereplication", "temp", "{}.pkl".format(sample_name_out)
+            "06_dereplication", "temp", "{}.pkl".format(sample_name_out)
         ),
         "wb",
     ) as log:
@@ -107,9 +115,19 @@ def main(project=Path.cwd()):
         gen_settings["compression level"].item(),
     )
 
+    # collect settings specific for that step
+    settings = pd.read_excel(
+        Path(project).joinpath(
+            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        sheet_name="06_dereplication",
+    )
+
+    min_abundance = settings["minimum sequence abundance"].item()
+
     ## collect input files from quality filtering step
     input = glob.glob(
-        str(Path(project).joinpath("5_quality_filtering", "data", "*.fasta.gz"))
+        str(Path(project).joinpath("05_quality_filtering", "data", "*.fasta.gz"))
     )
 
     print(
@@ -120,19 +138,24 @@ def main(project=Path.cwd()):
 
     ## create temporal output folder
     try:
-        os.mkdir(Path(project).joinpath("6_dereplication", "temp"))
+        os.mkdir(Path(project).joinpath("06_dereplication", "temp"))
     except FileExistsError:
         pass
 
     ## parallelize the dereplication
     Parallel(n_jobs=cores)(
-        delayed(dereplication)(file, project=project, comp_lvl=comp_lvl)
+        delayed(dereplication)(
+            file,
+            project=project,
+            comp_lvl=comp_lvl,
+            minimum_seq_abundance=min_abundance,
+        )
         for file in input
     )
 
     ## write log for the dereplication from pkl logs
     summary_logs = glob.glob(
-        str(Path(project).joinpath("6_dereplication", "temp", "*.pkl"))
+        str(Path(project).joinpath("06_dereplication", "temp", "*.pkl"))
     )
     summary = [pickle.load(open(line, "rb")) for line in summary_logs]
 
@@ -148,9 +171,9 @@ def main(project=Path.cwd()):
     )
     log_df = log_df.sort_values(by="File")
     log_df.to_excel(
-        Path(project).joinpath("6_dereplication", "Logfile_6_dereplication.xlsx"),
+        Path(project).joinpath("06_dereplication", "Logfile_06_dereplication.xlsx"),
         index=False,
-        sheet_name="6_dereplication",
+        sheet_name="06_dereplication",
     )
 
     ## add log to the project report
@@ -162,10 +185,10 @@ def main(project=Path.cwd()):
         if_sheet_exists="replace",
         engine="openpyxl",
     ) as writer:
-        log_df.to_excel(writer, sheet_name="6_dereplication", index=False)
+        log_df.to_excel(writer, sheet_name="06_dereplication", index=False)
 
     ## remove temporary files
-    shutil.rmtree(Path(project).joinpath("6_dereplication", "temp"))
+    shutil.rmtree(Path(project).joinpath("06_dereplication", "temp"))
 
 
 if __name__ == "__main__":
