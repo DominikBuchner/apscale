@@ -107,7 +107,7 @@ def main():
                 # give user output
                 st.success("GBIF taxonomy successfully saved to read storage.")
     else:
-        st.write("Please add sequence metadata first.")
+        st.write("**Please add sequence metadata first.**")
 
 
 main()

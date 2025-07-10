@@ -1,4 +1,4 @@
-import pyproj, json, time
+import pyproj, json, time, requests
 import dask.dataframe as dd
 import streamlit as st
 import pandas as pd
@@ -291,10 +291,20 @@ def perform_gbif_validation(read_data_to_modify: object):
             line["polygon_wkt"].item(),
         )
         # perform the api call
-        validation_result = occ.search(
-            scientificName=species, geometry=polygon, timeout=60
+        while True:
+            try:
+                validation_result = occ.search(
+                    scientificName=species, geometry=polygon, timeout=60
+                )
+                break
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    time.sleep(1)
+                    continue
+
+        results.append(
+            (hash_idx, "True" if validation_result["count"] > 0 else "False")
         )
-        results.append((hash_idx, True if validation_result["count"] > 0 else False))
         progress = int((i + 1) / nr_of_queries * 100)
         pbar.progress(progress, text=f"Processing {hash_idx}: {species}")
 
@@ -331,6 +341,9 @@ def perform_gbif_validation(read_data_to_modify: object):
         gbif_validation_species = dd.read_hdf(
             read_data_to_modify, key="gbif_validation_species"
         )
+        gbif_validation_species["gbif_validation"] = gbif_validation_species[
+            "gbif_validation"
+        ].astype(bool)
 
         group_mapping = dd.read_csv(
             group_mapping_path,
@@ -352,9 +365,15 @@ def perform_gbif_validation(read_data_to_modify: object):
         )
 
         # transform back to boolean, rename column
-        gbif_validation_sequence_groups["gbif_validation"] = (
-            gbif_validation_sequence_groups["gbif_validation"] > 0
+        gbif_validation_sequence_groups = gbif_validation_sequence_groups.assign(
+            gbif_validation=gbif_validation_sequence_groups["gbif_validation"] > 0
         )
+        gbif_validation_sequence_groups["gbif_validation"] = (
+            gbif_validation_sequence_groups["gbif_validation"].map(
+                lambda x: "True" if x else "False", meta=("gbif_validation", "object")
+            )
+        )
+
         gbif_validation_sequence_groups = gbif_validation_sequence_groups.rename(
             columns={"group_idx": "hash_idx"}
         )
@@ -393,7 +412,7 @@ def main():
     if not return_dict["sample_metadata"]:
         st.write("**Please add sample metadata first.**")
     if not return_dict["gbif_taxonomy"]:
-        st.write("**Please add gbif taxonomy**")
+        st.write("**Please add gbif taxonomy first.**")
 
     if return_dict["sample_metadata"] and return_dict["gbif_taxonomy"]:
         # extract column names from sample metadata
@@ -438,9 +457,10 @@ def main():
         )
 
         if compute_distributions:
-            compute_species_distributions(
-                st.session_state["read_data_to_modify"], lat, lon, radius
-            )
+            with st.spinner("Computing species distributions. Hang on."):
+                compute_species_distributions(
+                    st.session_state["read_data_to_modify"], lat, lon, radius
+                )
             st.success("Distributions have been computed and saved!")
 
         st.divider()

@@ -5,17 +5,43 @@ from pathlib import Path
 import os
 
 
-def filter_sequence_metadata(read_data_to_modify: object) -> object:
+def filter_sequence_metadata(
+    read_data_to_modify: object,
+    sequence_type: str,
+) -> object:
     """Function to filter the sequence metadata table with any filter applied in the GUI.
 
     Args:
         read_data_to_modify (object): Path to the read storage.
+        sequence_type (str): Specifies wether to use sequences or sequence groups. Only relevant if no filter is applied.
 
     Returns:
         object: Dask dataframe with the applied filters
     """
     # load the sequence metadata, merge with gbif taxonomy and gbif validation
-    sequence_metadata = dd.read_hdf(read_data_to_modify, key="sequence_metadata")
+    # only load sequence metadata if it is found, else return just hash_idx and sequences
+    try:
+        sequence_metadata = dd.read_hdf(
+            read_data_to_modify, key="sequence_metadata"
+        ).reset_index()
+    except KeyError:
+        st.write(
+            "No sequence metadata found, option disabled. Consider adding sequence metadata."
+        )
+        # create a dummy sequence metadata from the sequence data
+        type_to_key = {
+            "sequences": "sequence_data",
+            "sequence groups": "sequence_group_data",
+        }
+        sequence_metadata = dd.read_hdf(
+            read_data_to_modify, key=type_to_key[sequence_type]
+        )
+
+        # only reset index if sequence data is used, is alreay reset for the sequence groups
+        if sequence_type == "sequences":
+            sequence_metadata = sequence_metadata.reset_index()
+
+        return sequence_metadata
 
     # add gbif taxonomy
     try:
@@ -27,36 +53,55 @@ def filter_sequence_metadata(read_data_to_modify: object) -> object:
     except KeyError:
         pass
 
-    try:
-        # add gbif validation for sequences and sequence_groups
-        gbif_validation_species = dd.read_hdf(
-            read_data_to_modify, key="gbif_validation_species"
-        )
-        # merge both to the sequence metadata
-        sequence_metadata = sequence_metadata.merge(
-            gbif_validation_species, left_on="hash_idx", right_on="hash_idx", how="left"
-        ).rename(columns={"gbif_validation": "gbif_validation_species"})
-        # for saving in parquet cannot have mixed bool columns
-        sequence_metadata["gbif_validation_species"] = sequence_metadata[
-            "gbif_validation_species"
-        ].astype(str)
-    except KeyError:
-        pass
+    if sequence_type == "sequences":
+        try:
+            # add gbif validation for sequences and sequence_groups
+            gbif_validation_species = dd.read_hdf(
+                read_data_to_modify, key="gbif_validation_species"
+            )
+            gbif_validation_species = gbif_validation_species.dropna()
+            # merge both to the sequence metadata
+            sequence_metadata = sequence_metadata.merge(
+                gbif_validation_species,
+                left_on="hash_idx",
+                right_on="hash_idx",
+                how="left",
+            ).rename(columns={"gbif_validation": "gbif_validation_species"})
+            # for saving in parquet cannot have mixed bool columns
+            sequence_metadata["gbif_validation_species"] = sequence_metadata[
+                "gbif_validation_species"
+            ].astype(str)
+        except KeyError:
+            pass
 
-    try:
-        gbif_validation_groups = dd.read_hdf(
-            read_data_to_modify, key="gbif_validation_species_groups"
-        )
+    if sequence_type == "sequence groups":
+        try:
+            gbif_validation_groups = dd.read_hdf(
+                read_data_to_modify, key="gbif_validation_species_groups"
+            )
+            gbif_validation_groups = gbif_validation_groups.dropna()
+            # merge both to the sequence metadata
+            sequence_metadata = sequence_metadata.merge(
+                gbif_validation_groups,
+                left_on="hash_idx",
+                right_on="hash_idx",
+                how="left",
+            ).rename(columns={"gbif_validation": "gbif_validation_species_groups"})
+            sequence_metadata["gbif_validation_species_groups"] = sequence_metadata[
+                "gbif_validation_species_groups"
+            ].astype(str)
+        except KeyError:
+            pass
 
-        # merge both to the sequence metadata
+    # If sequence groups are selected filter the sequence metadata to only keep the groups ids instead of all sequences
+    # load the sequence group data
+    if sequence_type == "sequence groups":
+        sequence_data = dd.read_hdf(
+            read_data_to_modify, key="sequence_group_data", columns=["hash_idx"]
+        )
         sequence_metadata = sequence_metadata.merge(
-            gbif_validation_groups, left_on="hash_idx", right_on="hash_idx", how="left"
-        ).rename(columns={"gbif_validation": "gbif_validation_species_groups"})
-        sequence_metadata["gbif_validation_species_groups"] = sequence_metadata[
-            "gbif_validation_species_groups"
-        ].astype(str)
-    except KeyError:
-        pass
+            sequence_data, left_on="hash_idx", right_on="hash_idx", how="right"
+        )
 
     # let the user select columns to filter
     columns_to_filter = st.multiselect("Apply filter to:", sequence_metadata.columns)
@@ -127,18 +172,28 @@ def filter_sequence_metadata(read_data_to_modify: object) -> object:
 
 
 def create_data_split(read_data_to_modify: object) -> list:
-    sample_metadata = dd.read_hdf(read_data_to_modify, key="sample_metadata")
+    try:
+        sample_metadata = dd.read_hdf(read_data_to_modify, key="sample_metadata")
 
-    columns_to_select = sample_metadata.select_dtypes(
-        include=["object", "string"]
-    ).columns
+        columns_to_select = sample_metadata.select_dtypes(
+            include=["object", "string"]
+        ).columns
 
-    help = """This option will only display columns that do not hold numeric data, as splitting on those will result
-    in one read table per sample. Leave empty if a full read table is needed."""
+        help = """This option will only display columns that do not hold numeric data, as splitting on those will result
+        in one read table per sample. Leave empty if a full read table is needed."""
 
-    levels_to_split = st.multiselect(
-        label="Columns to split read table on:", options=columns_to_select, help=help
-    )
+        levels_to_split = st.multiselect(
+            label="Columns to split read table on:",
+            options=columns_to_select,
+            help=help,
+        )
+    except KeyError:
+        # give user output about missing data
+        st.write(
+            "No sample metadata found, option disabled. Consider adding sample metadata."
+        )
+        # return an empty list nevertheless
+        levels_to_split = False
 
     # collect the sample filters here
     if levels_to_split:
@@ -186,8 +241,12 @@ def export_read_tables(
         sequence_metadata, left_on="hash_idx", right_on="hash_idx", how="right"
     ).dropna(subset=["sample_idx"])
 
-    # merge with the sample metadata
-    sample_metadata = dd.read_hdf(read_data_to_modify, key="sample_metadata")
+    # merge with the sample metadata, if not metadata is present, just use sample data
+    try:
+        sample_metadata = dd.read_hdf(read_data_to_modify, key="sample_metadata")
+    except KeyError:
+        sample_metadata = dd.read_hdf(read_data_to_modify, key="sample_data")
+
     read_count_data = read_count_data.merge(
         sample_metadata, left_on="sample_idx", right_on="sample_idx", how="left"
     )
@@ -216,7 +275,7 @@ def export_read_tables(
             masks.append(mask)
         frames = [read_count_data[mask] for mask in masks]
 
-        # generate folder names here, as they correspond directly to the maskes
+        # generate folder names here, as they correspond directly to the masks
         folder_names = []
         for sub_table in sample_split:
             name = []
@@ -224,9 +283,10 @@ def export_read_tables(
                 name.append("_".join([column, condition]))
             folder_names.append(name)
         folder_names = ["-".join(name) for name in folder_names]
+        folder_names = [f"{name}_" for name in folder_names]
     else:
         frames = [read_count_data]
-        folder_names = ["read_table"]
+        folder_names = ["read_table_"]
 
     # the read tables will be saved here
     save_folder = Path(read_data_to_modify).parents[1]
@@ -280,13 +340,24 @@ def export_read_tables(
             # find out which columns to use for pivot
             pivot_index = [
                 col
-                for col in sample_sequence_matrix.columns.to_list()
+                for col in sample_sequence_matrix.columns
                 if col not in ["sample_idx", "sample_name", "read_count"]
             ]
 
-            sample_sequence_matrix[pivot_index] = sample_sequence_matrix[
-                pivot_index
-            ].fillna("")
+            # add 0 values to numeric types
+            for col in pivot_index:
+                if pd.api.types.is_numeric_dtype(sample_sequence_matrix[col]):
+                    sample_sequence_matrix[col] = sample_sequence_matrix[col].fillna(0)
+                else:
+                    sample_sequence_matrix[col] = sample_sequence_matrix[col].fillna("")
+
+                if (
+                    col == "gbif_validation_species"
+                    or col == "gbif_validation_species_groups"
+                ):
+                    sample_sequence_matrix[col] = (
+                        sample_sequence_matrix[col].astype("string").replace("<NA>", "")
+                    )
 
             # pivot the table to create a classic samples x sequences table
             wide_read_table = sample_sequence_matrix.pivot_table(
@@ -315,17 +386,20 @@ def export_read_tables(
                 .head(-1)
             )
 
-            # create an output folder for the export
-            output_folder = save_folder.joinpath(folder)
+            # create an output folder for the export, remove the underscore that is only needed for the raw export
+            output_folder = save_folder.joinpath(folder[:-1])
             output_folder.mkdir(parents=False, exist_ok=True)
+
+            if folder == "read_table_":
+                folder = ""
 
             # write the output file
             if output_format == "Excel":
-                output_file = output_folder.joinpath(f"{folder}_read_table.xlsx")
+                output_file = output_folder.joinpath(f"{folder}read_table.xlsx")
                 wide_read_table.to_excel(output_file, index=False)
             else:
                 output_file = output_folder.joinpath(
-                    f"{folder}_read_table.parquet.snappy"
+                    f"{folder}read_table.parquet.snappy"
                 )
                 wide_read_table.to_parquet(output_file)
 
@@ -353,11 +427,19 @@ def main():
 
     # define the title
     st.title("Export read tables", help=help)
+    output_sequence_type = st.radio(
+        label="Choose sequence type",
+        options=["sequences", "sequence groups"],
+        index=0,
+        horizontal=True,
+        key="sequence_type",
+    )
+
     st.header("Select filters for sequence metadata")
 
     # potentially filter the metadata. If no filter is selected, the full table will be returned.
     sequence_metadata = filter_sequence_metadata(
-        st.session_state["read_data_to_modify"]
+        st.session_state["read_data_to_modify"], sequence_type=output_sequence_type
     )
     st.divider()
 
@@ -378,13 +460,6 @@ def main():
     st.divider()
 
     st.header("Export read tables")
-    output_sequence_type = st.radio(
-        label="Choose sequence type",
-        options=["sequences", "sequence groups"],
-        index=0,
-        horizontal=True,
-        key="sequence_type",
-    )
 
     # remove hash idx from the output column, as it must be present anyways
     column_choices = [col for col in sequence_metadata.columns if col != "hash_idx"]
