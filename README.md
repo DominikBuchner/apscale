@@ -5,7 +5,7 @@ Advanced Pipeline for Simple yet Comprehensive AnaLysEs of DNA metabarcoding dat
 Apscale is a metabarcoding pipeline that handles the most common tasks in metabarcoding
 pipelines like paired-end merging, primer trimming, quality filtering and
 denoising, swarm and threshold based clustering as well as 
-basic data handling operations such as replciate merging and the removal of reads found in the negative controls. 
+basic data handling operations such as replicate merging and the removal of reads found in the negative controls. 
 It uses a simple command line interface and is configured via a single configuration file.
 To add metadata to the dataset a simple, browser-based interface is introduced in version 4.0. 
 It automatically uses the available ressources on the machine it runs on while still providing the option
