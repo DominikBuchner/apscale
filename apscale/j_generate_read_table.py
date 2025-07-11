@@ -287,16 +287,15 @@ def generate_fasta(
         )
     if data_type == "sequence_groups":
         fasta_data.to_hdf(
-            hdf_savename, key="fasta_data_sequences", mode="a", compute=True
+            hdf_savename, key="fasta_data_sequence_groups", mode="a", compute=True
         )
 
-    return fasta_data, fasta_savename
+    return fasta_savename
 
 
 def generate_sequence_groups(
     project: str,
     hdf_savename: str,
-    fasta_data: object,
     fasta_savename: str,
     group_threshold: float,
     chunksize: int,
@@ -306,7 +305,6 @@ def generate_sequence_groups(
     Args:
         project (str): Apscale project to work in.
         hdf_savename (str): Path to the data storage.
-        fasta_data (object): Data from the fasta that was created for the sequences.
         fasta_savename (str): Path to the fasta.
         group_threshold (float): Threshold to group with. Float between 0 and 1.
         chunksize (int): Chunksize to process the resulting sequence groups with.
@@ -355,6 +353,9 @@ def generate_sequence_groups(
         sep="\t",
         names=["query", "target", "pct_id"],
     )
+
+    # load the fasta data
+    fasta_data = dd.read_hdf(hdf_savename, key="fasta_data_sequences")
 
     # add the hash idx and order to query
     matchfile = (
@@ -516,7 +517,6 @@ def generate_read_table(
     hdf_savename: str,
     to_excel: bool,
     to_parquet: bool,
-    fasta_data: object,
     data_type: str,
 ) -> None:
     """Function to generate and save read tables to excel and or parquet
@@ -526,7 +526,6 @@ def generate_read_table(
         hdf_savename (str): Path to the hdf storage that holds all data.
         to_excel (bool): Wether or not to write to excel.
         to_parquet (bool): Wether or not to write to parquet.
-        fasta_data (object): fasta data as dask dataframe. holds the sequence data in correct order, so can be used for read_table_generation
         data_type (str): Wether to process sequences or sequence groups
     """
     if data_type == "sequences":
@@ -566,6 +565,12 @@ def generate_read_table(
                 chunksize = 10_000_000 // number_of_sequences
             if format == "parquet":
                 chunksize = 100_000_000 // number_of_sequences
+
+        # read the fasta data
+        if data_type == "sequences":
+            fasta_data = dd.read_hdf(hdf_savename, key="fasta_data_sequences")
+        if data_type == "sequence_groups":
+            fasta_data = dd.read_hdf(hdf_savename, key="fasta_data_sequence_groups")
 
         # collect all hashes and sequences
         all_sequence_data = fasta_data.compute()[["hash_idx", "hash", "seq"]]
@@ -811,7 +816,7 @@ def main(project=Path.cwd()):
     )
 
     # sort the hdf store to generate the fasta file, generate the fasta file
-    fasta_data, fasta_savename = generate_fasta(
+    fasta_savename = generate_fasta(
         project, hdf_savename, 100_000, data_type="sequences"
     )
 
@@ -829,7 +834,6 @@ def main(project=Path.cwd()):
             hdf_savename,
             to_excel,
             to_parquet,
-            fasta_data,
             data_type="sequences",
         )
 
@@ -860,7 +864,6 @@ def main(project=Path.cwd()):
         sequence_group_savename = generate_sequence_groups(
             project,
             hdf_savename,
-            fasta_data,
             fasta_savename,
             group_threshold,
             chunksize=100_000,
@@ -879,7 +882,7 @@ def main(project=Path.cwd()):
         )
 
         # sort the hdf store to generate the fasta file, generate the fasta file
-        fasta_data, fasta_savename = generate_fasta(
+        fasta_savename = generate_fasta(
             project, hdf_savename, 100_000, data_type="sequence_groups"
         )
 
@@ -897,6 +900,5 @@ def main(project=Path.cwd()):
                 hdf_savename,
                 to_excel,
                 to_parquet,
-                fasta_data,
                 data_type="sequence_groups",
             )
