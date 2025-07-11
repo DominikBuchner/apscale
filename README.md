@@ -11,13 +11,14 @@ To add metadata to the dataset a simple, browser-based interface is introduced i
 It automatically uses the available ressources on the machine it runs on while still providing the option
 to use less if desired. All modules can be run on their own or as a comprehensive workflow.
 
-For further details see the manual available [here]
+For further details see the manual available [here](https://github.com/DominikBuchner/apscale/blob/main/manual/apscale_manual.pdf)
 
 A graphical user interface version for apscale is available [here](https://github.com/TillMacher/apscale_gui).
 
 Programs used:
-* vsearch (PE merging, quality filtering, denoising, chimera removal) (https://github.com/torognes/vsearch)
-* cutadapt (primer trimming) (https://github.com/marcelm/cutadapt)
+* [vsearch](https://github.com/torognes/vsearch) (PE merging, quality filtering, denoising, chimera removal, species grouping) 
+* [cutadapt](https://github.com/marcelm/cutadapt) (primer trimming)
+* [swarm](https://github.com/torognes/swarm) (swarm clustering, if enable)
 
 Input:
 * demultiplexed gzipped reads
