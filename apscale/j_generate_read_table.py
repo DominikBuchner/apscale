@@ -280,6 +280,16 @@ def generate_fasta(
                 if hash != "empty_seq":
                     out_stream.write(f">{hash}\n{seq}\n")
 
+    # save the fasta data in the read store to not use a reference later in the code
+    if data_type == "sequences":
+        fasta_data.to_hdf(
+            hdf_savename, key="fasta_data_sequences", mode="a", compute=True
+        )
+    if data_type == "sequence_groups":
+        fasta_data.to_hdf(
+            hdf_savename, key="fasta_data_sequences", mode="a", compute=True
+        )
+
     return fasta_data, fasta_savename
 
 
@@ -534,7 +544,6 @@ def generate_read_table(
     with pd.HDFStore(hdf_savename, mode="r") as store:
         number_of_sequences = store.get_storer(sequence_key).nrows
         number_of_samples = store.get_storer("sample_data").nrows
-        store.close()
 
     # give user output, ignore the empty seq
     print(
