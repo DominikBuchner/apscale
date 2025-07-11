@@ -18,18 +18,18 @@ A graphical user interface version for apscale is available [here](https://githu
 Programs used:
 * [vsearch](https://github.com/torognes/vsearch) (PE merging, quality filtering, denoising, chimera removal, species grouping) 
 * [cutadapt](https://github.com/marcelm/cutadapt) (primer trimming)
-* [swarm](https://github.com/torognes/swarm) (swarm clustering, if enable)
+* [swarm](https://github.com/torognes/swarm) (swarm clustering, if enabled)
 
 Input:
 * demultiplexed gzipped reads
 
 Output:
-* log files, project report, ESV table
+* log files, project report, ESV / OTU tables
 
 ## Installation
 
 Apscale can be installed on all common operating systems (Windows, Linux, MacOS).
-Apscale requires Python 3.7 or higher and can be easily installed via pip in any command line:
+Apscale requires Python 3.11 or higher and can be easily installed via pip in any command line:
 
 `pip install apscale`
 
@@ -37,14 +37,15 @@ To update apscale run:
 
 `pip install --upgrade apscale`
 
-### Further dependencies - vsearch
+### Further dependencies - vsearch and swarm
 
-Apscale calls vsearch for multiple modules. It should be installed and be in PATH to be executed
+Apscale calls vsearch as well as swarm for multiple modules. It should be installed and be in PATH to be executed
 from anywhere on the system.
 
 Check the vsearch Github page for further info:
 
 https://github.com/torognes/vsearch
+https://github.com/torognes/swarm
 
 Support for compressed files with zlib is necessary. For Unix based systems this is shipped with
 vsearch, for Windows the zlib.dll can be downloaded via:
@@ -59,6 +60,7 @@ please take a look at the first answer on this stackoverflow issue:
 To check if everything is correctly set up please type this into your command line:
 
 `vsearch --version`
+`swarm --version`
 
 It should return a message similar to this:
 
@@ -75,6 +77,24 @@ zlib version 1.2.5, compile flags 65
 Compiled with support for bzip2-compressed files, but the library was not found.
 ```
 
+```
+Swarm 3.1.5
+Copyright (C) 2012-2024 Torbjorn Rognes and Frederic Mahe
+https://github.com/torognes/swarm
+
+Mahe F, Rognes T, Quince C, de Vargas C, Dunthorn M (2014)
+Swarm: robust and fast clustering method for amplicon-based studies
+PeerJ 2:e593 https://doi.org/10.7717/peerj.593
+
+Mahe F, Rognes T, Quince C, de Vargas C, Dunthorn M (2015)
+Swarm v2: highly-scalable and high-resolution amplicon clustering
+PeerJ 3:e1420 https://doi.org/10.7717/peerj.1420
+
+Mahe F, Czech L, Stamatakis A, Quince C, de Vargas C, Dunthorn M, Rognes T (2022)
+Swarm v3: towards tera-scale amplicon clustering
+Bioinformatics 38:1, 267-269 https://doi.org/10.1093/bioinformatics/btab493
+```
+
 ### Further dependencies - cutadapt
 
 Apscale also calls cutadapt with the primer trimming module. Cutadapt should be downloaded and installed
@@ -84,7 +104,7 @@ automatically with the Apscale installation. To check this, type:
 
 and it should return the version number, for example:
 
-`4.1`
+`5.1`
 
 ## How to use
 
@@ -94,22 +114,29 @@ Apscale is organized in projects with the following structure:
 
 <pre>
 C:\USERS\DOMINIK\DESKTOP\EXAMPLE_PROJECT
-├───1_raw data
+├───01_raw_data
 │   └───data
-├───2_demultiplexing
+├───02_demultiplexing
 │   └───data
-├───3_PE_merging
+├───03_PE_merging
 │   └───data
-├───4_primer_trimming
+├───04_primer_trimming
 │   └───data
-├───5_quality_filtering
+├───05_quality_filtering
 │   └───data
-├───6_dereplication
+├───06_dereplication
 │   └───data
-├───7_denoising
+├───07_denoising
 │   └───data
-└───8_esv_table
-└───9_replicate_negative_control_processing  
+├───08_swarm_clustering
+│   └───data
+├───09_replicate_merging
+│   └───data
+├───10_nc_removal
+│   └───data
+├───11_read_table
+├───12_analyze
+    └───data
 </pre>
 
 A new project can be initialized with the command:
@@ -134,9 +161,9 @@ lower the compression level and if disk space is a concern, the compression leve
 
 ### Configuring the specific settings
 
-Apscale gives default values for most of its settings. They can be changed if desired, please refer to the manual of vsearch and cutadapt
-for further information. The only value Apscale needs from the user is the primers used and the expected length of the fragment excluding the primers which is used for quality filtering. 
-If apscale should automatically merge replicates (keep reads only found in x replicates) or should remove the maximum reads from all negative controls from the respected ESV, this can be set in the last tab.
+Apscale gives default values for most of its settings. They can be changed if desired, please refer to the manual of vsearch and cutadapt as well as the 
+[manual](https://github.com/DominikBuchner/apscale/blob/main/manual/apscale_manual.pdf)
+for further information. The only value Apscale needs from the user is the primers used and the expected length of the fragment excluding the primers which is used for quality filtering. Version 4 added many new features. To create the behaviour of apscale 3.0.1, the default values can be used.
 After these are set, Apscale is ready to run!
 
 ### Running Apscale
