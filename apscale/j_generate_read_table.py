@@ -1,4 +1,4 @@
-import glob, gzip, pickle, shutil, datetime, os, math, subprocess, duckdb, time
+import glob, gzip, pickle, shutil, datetime, os, math, subprocess, duckdb
 import dask.dataframe as dd
 import pyarrow as pa
 from zict import File, Buffer, LRU, Func
@@ -406,7 +406,7 @@ def generate_sequence_groups(
         "group_lookup_table.duckdb",
     )
 
-    # remove old lookup table
+    # # remove old lookup table
     if duckdb_savename.is_file():
         duckdb_savename.unlink()
 

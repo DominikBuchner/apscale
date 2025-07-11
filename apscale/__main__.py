@@ -1,4 +1,4 @@
-import argparse, sys, subprocess
+import argparse, sys, subprocess, duckdb
 import importlib.util
 import apscale
 from pathlib import Path
