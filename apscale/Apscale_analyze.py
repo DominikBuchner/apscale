@@ -104,9 +104,11 @@ def main(project=Path.cwd()):
     initialize_read_storage(read_data_storage_path, project)
 
     st.write(
-        f"This project contains **{number_of_sequences}** sequences and **{number_of_samples}** samples."
+        f"This project contains **{number_of_sequences - 1}** sequences and **{number_of_samples}** samples."
     )
-    st.write(f"This project contains **{number_of_sequence_groups}** sequence groups.")
+    st.write(
+        f"This project contains **{number_of_sequence_groups - 1}** sequence groups."
+    )
 
     st.write(
         "This module can be used to **add metadata** to your read storage and **export read tables**."
