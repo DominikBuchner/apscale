@@ -534,6 +534,7 @@ def generate_read_table(
     with pd.HDFStore(hdf_savename, mode="r") as store:
         number_of_sequences = store.get_storer(sequence_key).nrows
         number_of_samples = store.get_storer("sample_data").nrows
+        store.close()
 
     # give user output, ignore the empty seq
     print(
