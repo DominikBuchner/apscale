@@ -355,7 +355,7 @@ def main(project=Path.cwd()):
     )
 
     # check that the data for poisson or cumulative threshold computation is valid
-    if threshold_type == "power_law":
+    if threshold_type == "power law":
         derep_settings = pd.read_excel(
             Path(project).joinpath(
                 "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
@@ -463,6 +463,7 @@ def main(project=Path.cwd()):
                 "ESVs",
             ],
         )
+        log_df["minsize"] = [pair[1] for pair in input]
         log_df = log_df.sort_values(by="File")
         log_df.to_excel(
             Path(project).joinpath("07_denoising", "Logfile_07_denoising.xlsx"),
