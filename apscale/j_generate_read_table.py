@@ -1,4 +1,4 @@
-import glob, os, datetime, gzip
+import glob, os, datetime, gzip, duckdb
 import pandas as pd
 from joblib import Parallel, delayed
 from pathlib import Path
@@ -19,6 +19,9 @@ def fasta_to_parquet(fasta_path: str, output_folder: str) -> None:
 
     # read the fasta with the simple fasta parser to generate rows
     all_rows = []
+
+    # add a dummy seq to each file to handle empty files greacefully
+    all_rows.append([fasta_name, "dummy_hash", "dummy_seq", 0])
 
     with gzip.open(fasta_path, "rt") as data_stream:
         for header, seq in SimpleFastaParser(data_stream):
@@ -42,9 +45,76 @@ def fasta_to_parquet(fasta_path: str, output_folder: str) -> None:
         }
     )
 
-    # create an output path
+    # create an output path, save data to parquet to ingest into duckdb later
     output_path = output_folder.joinpath(f"{fasta_name}.parquet.snappy")
     fasta_data.to_parquet(output_path)
+
+
+def build_read_store(input_folder, database_path):
+    # fetch the parquet files
+    parquet_path = input_folder.joinpath("*.parquet.snappy")
+
+    # connect to the database
+    read_data_store = duckdb.connect(database_path)
+
+    # add the readcounts from the parquet file to the table sequence_read_count_data
+    read_data_store.execute(
+        f"""
+        CREATE TABLE sequence_read_count_data_raw AS
+        SELECT * FROM read_parquet('{parquet_path}')
+        """
+    )
+
+    # add the sample data table
+    read_data_store.execute(
+        """
+        CREATE TABLE sample_data AS
+        SELECT 
+            row_number() OVER () AS sample_idx,
+            sample,  
+        FROM (
+            SELECT DISTINCT sample
+            FROM sequence_read_count_data_raw
+        )
+        """
+    )
+
+    # add the sequence data table
+    read_data_store.execute(
+        """
+        CREATE TABLE sequence_data AS
+        SELECT 
+            row_number() OVER () AS hash_idx,
+            hash,
+            sequence,
+        FROM (
+            SELECT DISTINCT hash, sequence
+            FROM sequence_read_count_data_raw
+        )
+        """
+    )
+
+    # create the indexed read_count_data, drop the raw read_count_data
+    read_data_store.execute(
+        """
+        CREATE TABLE sequence_read_count_data AS
+        SELECT
+            sd.sample_idx,
+            seqd.hash_idx AS sequence_idx,
+            srd.read_count 
+        FROM sequence_read_count_data_raw srd
+        JOIN sample_data sd ON srd.sample = sd.sample
+        JOIN sequence_data seqd ON srd.hash = seqd.hash AND srd.sequence = seqd.sequence
+    """
+    )
+
+    read_data_store.execute("DROP TABLE sequence_read_count_data_raw")
+
+    # add the counts for the fasta data
+
+    # give some user output
+
+    read_data_store.close()
 
 
 def main(project=Path.cwd()):
@@ -76,6 +146,7 @@ def main(project=Path.cwd()):
 
     # find out which dataset to load
     prior_step = choose_input(project, "11_generate_read_table")
+    print(prior_step)
 
     # collect the input for read table generation
     # generate a data folder to save the hdf store
@@ -92,6 +163,19 @@ def main(project=Path.cwd()):
 
     data_path = Path(project).joinpath("11_read_table", "data")
     temp_path = Path(project).joinpath("11_read_table", "temp")
+    project_name = Path(project).stem.replace("_apscale", "")
+    database_path = data_path.joinpath(f"{project_name}_read_data_storage.duckdb")
+
+    # check if there is an old db, remove it if it is
+    if database_path.is_file():
+        database_path.unlink()
+
+    # check if there are old parquet files, remove them
+    for file in temp_path.glob("*.parquet.snappy"):
+        if file.is_file():
+            file.unlink()
+
+    # check if there are old parquet files and remove them first
 
     print(
         f"{datetime.datetime.now().strftime('%H:%M:%S')}: Building read data storage."
@@ -101,3 +185,6 @@ def main(project=Path.cwd()):
     Parallel(n_jobs=cores)(
         delayed(fasta_to_parquet)(fasta_file, temp_path) for fasta_file in input_files
     )
+
+    # build the duckdb database
+    build_read_store(temp_path, database_path)
