@@ -64,12 +64,14 @@ def build_read_store(input_folder, database_path):
     # connect to the database
     read_data_store = duckdb.connect(database_path)
 
-    # TODO create a temporary database that can be deleted later with all sequence information
+    # attach a temp database to the read_data_store
+    temp_database = input_folder.joinpath("sequence_read_count_data.duckdb")
+    read_data_store.execute(f"ATTACH '{temp_database}' AS temp_db")
 
     # add the readcounts from the parquet file to the table sequence_read_count_data
     read_data_store.execute(
         f"""
-        CREATE TABLE sequence_read_count_data_raw AS
+        CREATE TABLE temp_db.sequence_read_count_data AS
         SELECT * FROM read_parquet('{parquet_path}')
         """
     )
@@ -77,13 +79,13 @@ def build_read_store(input_folder, database_path):
     # add the sample data table
     read_data_store.execute(
         """
-        CREATE TABLE sample_data AS
+        CREATE TABLE main.sample_data AS
         SELECT 
             row_number() OVER () AS sample_idx,
             sample,  
         FROM (
             SELECT DISTINCT sample
-            FROM sequence_read_count_data_raw
+            FROM temp_db.sequence_read_count_data
         )
         """
     )
@@ -91,14 +93,14 @@ def build_read_store(input_folder, database_path):
     # add the sequence data table
     read_data_store.execute(
         """
-        CREATE TABLE sequence_data AS
+        CREATE TABLE main.sequence_data AS
         SELECT 
             row_number() OVER () AS hash_idx,
             hash,
             sequence,
         FROM (
             SELECT DISTINCT hash, sequence
-            FROM sequence_read_count_data_raw
+            FROM temp_db.sequence_read_count_data
         )
         """
     )
@@ -106,18 +108,16 @@ def build_read_store(input_folder, database_path):
     # create the indexed read_count_data, drop the raw read_count_data
     read_data_store.execute(
         """
-        CREATE TABLE sequence_read_count_data AS
+        CREATE TABLE main.sequence_read_count_data AS
         SELECT
             sd.sample_idx,
             seqd.hash_idx AS sequence_idx,
             srd.read_count 
-        FROM sequence_read_count_data_raw srd
-        JOIN sample_data sd ON srd.sample = sd.sample
-        JOIN sequence_data seqd ON srd.hash = seqd.hash AND srd.sequence = seqd.sequence
+        FROM temp_db.sequence_read_count_data srd
+        JOIN main.sample_data sd ON srd.sample = sd.sample
+        JOIN main.sequence_data seqd ON srd.hash = seqd.hash AND srd.sequence = seqd.sequence
     """
     )
-
-    read_data_store.execute("DROP TABLE sequence_read_count_data_raw")
 
     # add the counts for the fasta data
 

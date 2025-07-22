@@ -1,0 +1,2 @@
+C:\vsearch\vsearch.exe --usearch_global query.fasta --db database.fasta --id 0.2 --userfields query+target+id --maxaccepts 100 --alnout test.txt
+vsearch v2.30.0_win_x86_64, 127.9GB RAM, 24 cores
