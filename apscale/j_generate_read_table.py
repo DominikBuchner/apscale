@@ -1,4 +1,4 @@
-import glob, os, datetime, gzip, duckdb
+import glob, os, datetime, gzip, duckdb, hashlib
 import pandas as pd
 from joblib import Parallel, delayed
 from pathlib import Path
@@ -6,13 +6,14 @@ from apscale.a_create_project import choose_input
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 
 
-def fasta_to_parquet(fasta_path: str, output_folder: str) -> None:
+def fasta_to_parquet(fasta_path: str, output_folder: str, perform_hash: bool) -> None:
     """Function to stream fasta to parquet as tables in the form of
     [header, sequence, count]
 
     Args:
         fasta_path (str): Path to the fasta file to transform.
         output_folder (str): Output folder to write to
+        perform_hash (bool): Wether to hash the sequences prior to parquet generation. Needed if no data aggregation step is used!
     """
     # extract the sample name from the fasta_path
     fasta_name = Path(fasta_path).with_suffix("").stem
@@ -27,6 +28,12 @@ def fasta_to_parquet(fasta_path: str, output_folder: str) -> None:
         for header, seq in SimpleFastaParser(data_stream):
             header_data = header.split(";size=")
             seq_hash, seq_count = header_data[0], int(header_data[1])
+
+            # only compute hash if needed
+            if perform_hash:
+                seq_hash = seq.encode("ascii")
+                seq_hash = hashlib.sha3_256(seq_hash).hexdigest()
+
             seq = seq.upper().strip()
             all_rows.append([fasta_name, seq_hash, seq, seq_count])
 
@@ -56,6 +63,8 @@ def build_read_store(input_folder, database_path):
 
     # connect to the database
     read_data_store = duckdb.connect(database_path)
+
+    # TODO create a temporary database that can be deleted later with all sequence information
 
     # add the readcounts from the parquet file to the table sequence_read_count_data
     read_data_store.execute(
@@ -146,7 +155,6 @@ def main(project=Path.cwd()):
 
     # find out which dataset to load
     prior_step = choose_input(project, "11_generate_read_table")
-    print(prior_step)
 
     # collect the input for read table generation
     # generate a data folder to save the hdf store
@@ -181,10 +189,19 @@ def main(project=Path.cwd()):
         f"{datetime.datetime.now().strftime('%H:%M:%S')}: Building read data storage."
     )
 
-    # transform all fasta files in input to parquet to ingest into duckdb
-    Parallel(n_jobs=cores)(
-        delayed(fasta_to_parquet)(fasta_file, temp_path) for fasta_file in input_files
-    )
+    # only perform hashing if no aggregation step has been used before
+    if prior_step == "06_dereplication":
+        # transform all fasta files in input to parquet to ingest into duckdb
+        Parallel(n_jobs=cores)(
+            delayed(fasta_to_parquet)(fasta_file, temp_path, True)
+            for fasta_file in input_files
+        )
+    else:
+        # transform all fasta files in input to parquet to ingest into duckdb
+        Parallel(n_jobs=cores)(
+            delayed(fasta_to_parquet)(fasta_file, temp_path, False)
+            for fasta_file in input_files
+        )
 
     # build the duckdb database
     build_read_store(temp_path, database_path)
