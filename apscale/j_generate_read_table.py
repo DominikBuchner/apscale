@@ -125,22 +125,26 @@ def build_read_store(input_folder, database_path):
 
     # add the counts and order for the fasta data
     read_data_store.execute(
+        "ALTER TABLE sequence_data ADD COLUMN sequence_order BIGINT"
+    )
+    read_data_store.execute("ALTER TABLE sequence_data ADD COLUMN read_sum BIGINT")
+
+    read_data_store.execute(
         """
-    SELECT sd.*,
-    r.sequence_order,
-    r.read_sum
-    FROM sequence_data sd    
-    LEFT JOIN (    
-        SELECT 
-            row_number() OVER (ORDER BY sum(read_count) DESC) AS sequence_order, 
-            sequence_idx, 
-            sum(read_count) AS read_sum
-        FROM sequence_read_count_data
-        GROUP BY sequence_idx  
-        ORDER BY sum(read_count) DESC
+        UPDATE sequence_data AS sd
+        SET
+            sequence_order = r.sequence_order,
+            read_sum = r.read_sum
+        FROM (
+            SELECT
+                row_number() OVER (ORDER BY sum(read_count) DESC) AS sequence_order, 
+                sequence_idx, 
+                sum(read_count) AS read_sum
+            FROM sequence_read_count_data
+            GROUP BY sequence_idx  
         ) r
-    ON sd.sequence_idx = r.sequence_idx              
-        """
+        WHERE sd.sequence_idx = r.sequence_idx
+    """
     )
 
     # close the read data store
