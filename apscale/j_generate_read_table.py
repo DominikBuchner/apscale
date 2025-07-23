@@ -156,6 +156,62 @@ def build_read_store(input_folder, database_path):
             file.unlink()
 
 
+def generate_fasta(
+    project_name: str, output_folder: str, database_path: str, sequence_type: str
+) -> None:
+    """Function to read the database and create a fasta file either for sequences or sequence groups
+
+    Args:
+        project_name (str): Name of the current apscale project.
+        output_folder (str): Output folder to write to.
+        database_path (str): Path to the database where the data is stored.
+        sequence_type (str): Wether to write sequence or group
+    """
+    # establish the connection to the database
+    read_data_store = duckdb.connect(database_path)
+    read_data_store_cursor = read_data_store.execute(
+        f"SELECT hash, sequence FROM {sequence_type}_data ORDER BY {sequence_type}_order"
+    )
+    output_fasta = Path(output_folder).joinpath(
+        f"0_{project_name}_{sequence_type}s.fasta"
+    )
+
+    with open(output_fasta, "w") as out_stream:
+        while True:
+            fasta_batch = read_data_store_cursor.fetchmany(100_000)
+            if not fasta_batch:
+                break
+            lines = [
+                f">{hash}\n{sequence}\n"
+                for hash, sequence in fasta_batch
+                if sequence != "dummy_seq"
+            ]
+            out_stream.writelines(lines)
+
+    read_data_store.close()
+
+
+def generate_read_table(
+    project_name: str, output_folder: str, database_path: str, sequence_type: str
+) -> None:
+    """Function to generate a read table from the database. Will be split into multiple tables if data is too large.
+
+    Args:
+        project_name (str): Name of the apscale project.
+        output_folder (str): Output folder to write to.
+        database_path (str): Path to the database to select the data from.
+        sequence_type (str): Wether to write sequence or group data.
+    """
+    read_data_store = duckdb.connect(database_path)
+    test = read_data_store.execute(
+        f"PIVOT {sequence_type}_read_count_data ON sample_idx USING sum(read_count)"
+    ).df()
+
+    test.to_excel(Path(output_folder.joinpath("test_output.xlsx")))
+
+    read_data_store.close()
+
+
 def main(project=Path.cwd()):
     """Main function to initially create the read table data.
 
@@ -239,3 +295,15 @@ def main(project=Path.cwd()):
     print(
         f"{datetime.datetime.now().strftime('%H:%M:%S')}: Read data storage build successfully."
     )
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating fasta file for sequences."
+    )
+
+    # create the fasta file for the sequences
+    generate_fasta(project_name, data_path, database_path, "sequence")
+
+    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating read table(s).")
+
+    # create the read table for the sequences
+    generate_read_table(project_name, data_path, database_path, "sequence")
