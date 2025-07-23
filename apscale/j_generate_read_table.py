@@ -95,7 +95,7 @@ def build_read_store(input_folder, database_path):
         """
         CREATE TABLE main.sequence_data AS
         SELECT 
-            row_number() OVER () AS hash_idx,
+            row_number() OVER () AS sequence_idx,
             hash,
             sequence,
         FROM (
@@ -111,7 +111,7 @@ def build_read_store(input_folder, database_path):
         CREATE TABLE main.sequence_read_count_data AS
         SELECT
             sd.sample_idx,
-            seqd.hash_idx AS sequence_idx,
+            seqd.sequence_idx,
             srd.read_count 
         FROM temp_db.sequence_read_count_data srd
         JOIN main.sample_data sd ON srd.sample = sd.sample
@@ -119,11 +119,37 @@ def build_read_store(input_folder, database_path):
     """
     )
 
-    # add the counts for the fasta data
+    # disattach and remove the temp db
+    read_data_store.execute("DETACH temp_db")
+    temp_database.unlink()
 
-    # give some user output
+    # add the counts and order for the fasta data
+    read_data_store.execute(
+        """
+    SELECT sd.*,
+    r.sequence_order,
+    r.read_sum
+    FROM sequence_data sd    
+    LEFT JOIN (    
+        SELECT 
+            row_number() OVER (ORDER BY sum(read_count) DESC) AS sequence_order, 
+            sequence_idx, 
+            sum(read_count) AS read_sum
+        FROM sequence_read_count_data
+        GROUP BY sequence_idx  
+        ORDER BY sum(read_count) DESC
+        ) r
+    ON sd.sequence_idx = r.sequence_idx              
+        """
+    )
 
+    # close the read data store
     read_data_store.close()
+
+    # remove the parquet files
+    for file in Path(input_folder).glob("*.parquet.snappy"):
+        if file.is_file():
+            file.unlink()
 
 
 def main(project=Path.cwd()):
@@ -205,3 +231,7 @@ def main(project=Path.cwd()):
 
     # build the duckdb database
     build_read_store(temp_path, database_path)
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Read data storage build successfully."
+    )
