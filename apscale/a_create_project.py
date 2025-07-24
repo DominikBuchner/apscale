@@ -130,7 +130,6 @@ def create_project(project_name):
             columns=[
                 "generate read table",
                 "to excel",
-                "to parquet",
                 "sequence group threshold",
             ],
         )
