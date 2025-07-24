@@ -157,7 +157,11 @@ def build_read_store(input_folder, database_path):
 
 
 def generate_fasta(
-    project_name: str, output_folder: str, database_path: str, sequence_type: str
+    project_name: str,
+    output_folder: str,
+    database_path: str,
+    sequence_type: str,
+    temp_folder: str,
 ) -> None:
     """Function to read the database and create a fasta file either for sequences or sequence groups
 
@@ -166,6 +170,7 @@ def generate_fasta(
         output_folder (str): Output folder to write to.
         database_path (str): Path to the database where the data is stored.
         sequence_type (str): Wether to write sequence or group
+        temp_folder (str): Path to a temp folder for intermediate writes. Will be deleted at end of function.
     """
     # establish the connection to the database
     read_data_store = duckdb.connect(database_path)
@@ -306,4 +311,4 @@ def main(project=Path.cwd()):
     print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating read table(s).")
 
     # create the read table for the sequences
-    generate_read_table(project_name, data_path, database_path, "sequence")
+    generate_read_table(project_name, data_path, database_path, "sequence", temp_path)
