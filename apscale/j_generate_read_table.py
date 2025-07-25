@@ -119,7 +119,7 @@ def build_read_store(input_folder, database_path):
     """
     )
 
-    # disattach and remove the temp db
+    # detach and remove the temp db
     read_data_store.execute("DETACH temp_db")
     temp_database.unlink()
 
@@ -145,6 +145,24 @@ def build_read_store(input_folder, database_path):
         ) r
         WHERE sd.sequence_idx = r.sequence_idx
     """
+    )
+
+    # give some user output
+    nr_samples = read_data_store.execute(
+        "SELECT COUNT(sample_idx) FROM sample_data"
+    ).fetchone()[0]
+    nr_sequences = (
+        read_data_store.execute(
+            "SELECT COUNT(sequence_idx) from sequence_data"
+        ).fetchone()[0]
+        - 1  # remove the empty seq
+    )
+    nr_reads = read_data_store.execute(
+        "SELECT SUM(read_sum) FROM sequence_data"
+    ).fetchone()[0]
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Dataset contains {nr_samples:,} samples, {nr_sequences:,} distinct sequences and {nr_reads:,} reads."
     )
 
     # close the read data store
@@ -173,7 +191,7 @@ def generate_fasta(
     # establish the connection to the database
     read_data_store = duckdb.connect(database_path)
     read_data_store_cursor = read_data_store.execute(
-        f"SELECT hash, sequence FROM {sequence_type}_data ORDER BY {sequence_type}_order"
+        f"SELECT hash, sequence FROM {sequence_type}_data WHERE sequence != 'dummy_seq' ORDER BY {sequence_type}_order"
     )
     output_fasta = Path(output_folder).joinpath(
         f"0_{project_name}_{sequence_type}s.fasta"
@@ -184,11 +202,7 @@ def generate_fasta(
             fasta_batch = read_data_store_cursor.fetchmany(100_000)
             if not fasta_batch:
                 break
-            lines = [
-                f">{hash}\n{sequence}\n"
-                for hash, sequence in fasta_batch
-                if sequence != "dummy_seq"
-            ]
+            lines = [f">{hash}\n{sequence}\n" for hash, sequence in fasta_batch]
             out_stream.writelines(lines)
 
     read_data_store.close()
@@ -218,26 +232,26 @@ def generate_read_table(
     temp_db = Path(temp_folder).joinpath("temp.duckdb")
     read_data_store.execute(f"ATTACH '{temp_db}' as temp_db")
 
-    # define the query before the pivot
-    select_query = f"""
+    # define the select query. Build a table with hash_idx, sequence_idx, sequence_order, sample, read_count
+    query_string = f"""
     SELECT
-        seqd.hash,
-        seqd.sequence,
+        seqd.sequence_idx AS sequence,
+        seqd.sequence_idx AS hash,
         seqd.sequence_order,
         sd.sample,
-        COALESCE(rcd.read_count, 0) as read_count
+        COALESCE(rcd.read_count, 0) AS read_count
     FROM main.{sequence_type}_data seqd
     CROSS JOIN main.sample_data sd
     LEFT JOIN main.{sequence_type}_read_count_data rcd
         ON seqd.sequence_idx = rcd.sequence_idx
         AND sd.sample_idx = rcd.sample_idx
-    ORDER BY seqd.sequence_order ASC, sd.sample ASC
+    ORDER BY seqd.sequence_order ASC
     """
 
     # write the result to temp to perform multiple pivots if subsampling is needed
     read_data_store.execute(
         f"""CREATE TABLE temp_db.read_table_data AS
-    {select_query}
+    {query_string}
     """
     )
 
@@ -272,53 +286,62 @@ def generate_read_table(
                 sample_selector = ", ".join(f"'{sample}'" for sample in chunk)
                 sample_columns = ", ".join(f'"{sample}"' for sample in chunk)
                 # pivot the read_table data
+                read_data_store.execute(
+                    f"""
+                    CREATE OR REPLACE TABLE temp_db.pivot AS
+                        SELECT hash, sequence, {sample_columns} FROM (
+                            SELECT * FROM temp_db.read_table_data
+                            PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
+                            ORDER BY sequence_order
+                        )
+                    """
+                )
+
                 read_table = read_data_store.execute(
                     f"""
-                    SELECT hash, sequence, {sample_columns} FROM (
-                        SELECT * FROM temp_db.read_table_data
-                        PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
-                        ORDER BY sequence_order
-                    )
-                    WHERE sequence != 'dummy_seq'
-                    """
+                    SELECT 
+                        * 
+                    FROM main.sequence_data sd
+                    LEFT JOIN temp_db.pivot pivot
+                        ON
+                        """
                 ).df()
+                print(read_table)
+                # # define the output path
+                # output_file_name_xlsx = Path(
+                #     output_folder.joinpath(
+                #         f"0_{project_name}_{sequence_type}_read_table_part_{idx}.xlsx"
+                #     )
+                # )
 
-                # define the output path
-                output_file_name_xlsx = Path(
-                    output_folder.joinpath(
-                        f"0_{project_name}_{sequence_type}_read_table_part_{idx}.xlsx"
-                    )
-                )
+                # # write the output, give user output
+                # read_table.to_excel(
+                #     output_file_name_xlsx, index=False, engine="xlsxwriter"
+                # )
 
-                # write the output, give user output
-                read_table.to_excel(
-                    output_file_name_xlsx, index=False, engine="xlsxwriter"
-                )
+    # # always write output to parquet
+    # sample_selector = ", ".join(f"'{sample}'" for sample in sample_names)
+    # sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
 
-    # always write output to parquet
-    sample_selector = ", ".join(f"'{sample}'" for sample in sample_names)
-    sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
+    # # define the output file name
+    # output_file_name_parquet = Path(
+    #     output_folder.joinpath(
+    #         f"0_{project_name}_{sequence_type}_read_table.parquet.snappy"
+    #     )
+    # )
 
-    # define the output file name
-    output_file_name_parquet = Path(
-        output_folder.joinpath(
-            f"0_{project_name}_{sequence_type}_read_table.parquet.snappy"
-        )
-    )
-
-    # pivot the read_table data and write to parquet
-    read_data_store.execute(
-        f"""
-        COPY (
-            SELECT hash, sequence, {sample_columns} FROM (
-                SELECT * FROM temp_db.read_table_data
-                PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
-                ORDER BY sequence_order
-            )
-            WHERE sequence != 'dummy_seq'
-        ) TO '{output_file_name_parquet}' (FORMAT 'parquet')
-        """
-    )
+    # # pivot the read_table data and write to parquet
+    # read_data_store.execute(
+    #     f"""
+    #     COPY (
+    #         SELECT hash, sequence, {sample_columns} FROM (
+    #             SELECT * FROM temp_db.read_table_data
+    #             PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
+    #             ORDER BY sequence_order
+    #         )
+    #     ) TO '{output_file_name_parquet}' (FORMAT 'parquet')
+    #     """
+    # )
 
     # close the connection
     read_data_store.close()
