@@ -263,10 +263,12 @@ def generate_read_table(
             chunksize = 10_000_000 // sequence_count
 
             # fetch the sample names from read store
-            sample_names = enumerate(more_itertools.chunked(sample_names, n=chunksize))
+            sample_names_iter = enumerate(
+                more_itertools.chunked(sample_names, n=chunksize)
+            )
 
             # for each chunk create a pivot table and stream it directly to excel
-            for idx, chunk in sample_names:
+            for idx, chunk in sample_names_iter:
                 sample_selector = ", ".join(f"'{sample}'" for sample in chunk)
                 sample_columns = ", ".join(f'"{sample}"' for sample in chunk)
                 # pivot the read_table data
@@ -282,32 +284,41 @@ def generate_read_table(
                 ).df()
 
                 # define the output path
-                output_file_name = Path(
+                output_file_name_xlsx = Path(
                     output_folder.joinpath(
                         f"0_{project_name}_{sequence_type}_read_table_part_{idx}.xlsx"
                     )
                 )
 
                 # write the output, give user output
-                read_table.to_excel(output_file_name, index=False, engine="xlsxwriter")
+                read_table.to_excel(
+                    output_file_name_xlsx, index=False, engine="xlsxwriter"
+                )
 
     # always write output to parquet
     sample_selector = ", ".join(f"'{sample}'" for sample in sample_names)
     sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
-    print(sample_selector)
-    print(sample_columns)
-    # pivot the read_table data
-    # read_table = read_data_store.execute(
-    #     f"""
-    #     SELECT hash, sequence, {sample_columns} FROM (
-    #         SELECT * FROM temp_db.read_table_data
-    #         PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
-    #         ORDER BY sequence_order
-    #     )
-    #     WHERE sequence != 'dummy_seq'
-    #     """
-    # ).df()
-    # print(read_table)
+
+    # define the output file name
+    output_file_name_parquet = Path(
+        output_folder.joinpath(
+            f"0_{project_name}_{sequence_type}_read_table.parquet.snappy"
+        )
+    )
+
+    # pivot the read_table data and write to parquet
+    read_data_store.execute(
+        f"""
+        COPY (
+            SELECT hash, sequence, {sample_columns} FROM (
+                SELECT * FROM temp_db.read_table_data
+                PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
+                ORDER BY sequence_order
+            )
+            WHERE sequence != 'dummy_seq'
+        ) TO '{output_file_name_parquet}' (FORMAT 'parquet')
+        """
+    )
 
     # close the connection
     read_data_store.close()
