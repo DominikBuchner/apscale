@@ -232,47 +232,64 @@ def generate_read_table(
     temp_db = Path(temp_folder).joinpath("temp.duckdb")
     read_data_store.execute(f"ATTACH '{temp_db}' as temp_db")
 
-    # define the select query. Build a table with hash_idx, sequence_idx, sequence_order, sample, read_count
-    query_string = f"""
-    SELECT
-        seqd.sequence_idx AS sequence_idx,
-        seqd.sequence_idx AS hash_idx,
-        seqd.sequence_order,
-        sd.sample,
-        COALESCE(rcd.read_count, 0) AS read_count
-    FROM main.{sequence_type}_data seqd
-    CROSS JOIN main.sample_data sd
-    LEFT JOIN main.{sequence_type}_read_count_data rcd
-        ON seqd.sequence_idx = rcd.sequence_idx
-        AND sd.sample_idx = rcd.sample_idx
-    ORDER BY seqd.sequence_order ASC
-    """
-
-    # write the result to temp to perform multiple pivots if subsampling is needed
-    read_data_store.execute(
-        f"""CREATE TABLE temp_db.read_table_data AS
-    {query_string}
-    """
-    )
-
-    # extract the number of sequences
+    # gather some basic stats about the read store
+    # extract the number of sequences, includes the dummy_seq as it is removed after pivot
     sequence_count = read_data_store.execute(
-        "SELECT COUNT(DISTINCT hash_idx) FROM temp_db.read_table_data"
+        f"SELECT COUNT(hash) FROM main.{sequence_type}_data"
     ).fetchone()[0]
 
     # extract the sample names as they are needed regardles of output format
     sample_names = read_data_store.execute(
-        "SELECT DISTINCT sample FROM temp_db.read_table_data ORDER BY sample ASC"
+        "SELECT DISTINCT sample FROM main.sample_data ORDER BY sample ASC"
     ).fetchall()
     sample_names = [row[0] for row in sample_names]
 
-    # # if excel is used as output format compute the maximum samples per excel
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Building cross product of samples and sequences."
+    )
+
+    # build the cross product first
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.cross_product AS
+            SELECT
+                seqd.sequence_idx,
+                sd.sample_idx,
+                sd.sample,
+            FROM
+                main.{sequence_type}_data AS seqd
+            CROSS JOIN main.sample_data AS sd                    
+        """
+    )
+
+    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Joining in read counts.")
+
+    read_data_store.execute(
+        f"""
+    CREATE OR REPLACE TABLE temp_db.read_table_data AS
+        SELECT
+            cp.sequence_idx,
+            cp.sample_idx,
+            cp.sample,
+            COALESCE(rcd.read_count, 0) as read_count
+        FROM temp_db.cross_product AS cp
+        LEFT JOIN main.{sequence_type}_read_count_data AS rcd
+            ON cp.sequence_idx = rcd.sequence_idx
+            AND cp.sample_idx = rcd.sample_idx
+    """
+    )
+
+    # if excel is used as output format compute the maximum samples per excel
     if to_excel:
         if sequence_count > 1_000_000:
             print(
-                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Dataset with {sequence_count} sequences is too large for excel. Only using parquet."
+                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Dataset with {sequence_count - 1:,} sequences is too large for excel. Only using parquet."
             )
         else:
+            print(
+                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Generating table(s) for Excel output."
+            )
+
             # compute the maximum number of samples per file
             chunksize = 10_000_000 // sequence_count
 
@@ -284,20 +301,37 @@ def generate_read_table(
             # for each chunk create a pivot table and stream it directly to excel
             for idx, chunk in sample_names_iter:
                 sample_selector = ", ".join(f"'{sample}'" for sample in chunk)
-                sample_columns = ", ".join(f'"{sample}"' for sample in chunk)
-                # pivot the read_table data
+                sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
+
+                # select the subset of samples we are currently looking at
                 read_data_store.execute(
                     f"""
-                    CREATE OR REPLACE TABLE temp_db.pivot AS
-                        SELECT hash_idx, sequence_idx, {sample_columns} FROM (
-                            SELECT * FROM temp_db.read_table_data
-                            PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
-                            ORDER BY sequence_order
-                        )
+                    CREATE OR REPLACE TABLE temp_db.filtered AS  
+                        SELECT * FROM temp_db.read_table_data rtd
+                        WHERE rtd.sample IN ({sample_selector})
                     """
                 )
 
-                # extract the read table with correct column names
+                print(
+                    f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table."
+                )
+
+                read_data_store.execute(
+                    f"""
+                    CREATE OR REPLACE TABLE temp_db.pivot AS
+                        SELECT sequence_idx, {sample_columns}
+                        FROM (
+                            SELECT sequence_idx, sample, read_count
+                            FROM temp_db.filtered
+                        )
+                        PIVOT (SUM(read_count) FOR sample IN ({sample_columns}))
+                    """
+                )
+
+                print(
+                    f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes, sequences and ordering table."
+                )
+
                 read_table = read_data_store.execute(
                     f"""
                     SELECT
@@ -312,6 +346,10 @@ def generate_read_table(
                     """
                 ).df()
 
+                print(
+                    f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing Excel output file."
+                )
+
                 # define the output path
                 output_file_name_xlsx = Path(
                     output_folder.joinpath(
@@ -325,8 +363,9 @@ def generate_read_table(
                 )
 
     # always write output to parquet
-    sample_selector = ", ".join(f"'{sample}'" for sample in sample_names)
-    sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Generating table(s) for parquet output."
+    )
 
     # define the output file name
     output_file_name_parquet = Path(
@@ -335,15 +374,37 @@ def generate_read_table(
         )
     )
 
+    # create a sql friendly sample columns variable
+    sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
+    sample_selector = ", ".join(f"'{sample}'" for sample in sample_names)
+
+    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table.")
+
+    # chunk the data
+    max_pivot_cells = 10_000_000
+    max_rows_per_chunk = max(1000, max_pivot_cells // len(sample_names))
+
+    # collect the sequence ids
+    sequence_ids = read_data_store.execute(
+        "SELECT sequence_idx FROM main.sequence_data"
+    ).fetchall()
+    sequence_ids = [row[0] for row in sequence_ids]
+
     read_data_store.execute(
         f"""
         CREATE OR REPLACE TABLE temp_db.pivot AS
-            SELECT hash_idx, sequence_idx, {sample_columns} FROM (
-                SELECT * FROM temp_db.read_table_data
+            SELECT sequence_idx, {sample_columns} 
+            FROM (
+                SELECT sequence_idx, sample, read_count
+                FROM temp_db.read_table_data
+                )
                 PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
-                ORDER BY sequence_order
-            )
+
         """
+    )
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes, sequences and ordering table and writing parquet output."
     )
 
     # extract the read table with correct column names
