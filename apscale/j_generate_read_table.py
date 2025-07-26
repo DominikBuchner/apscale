@@ -235,8 +235,8 @@ def generate_read_table(
     # define the select query. Build a table with hash_idx, sequence_idx, sequence_order, sample, read_count
     query_string = f"""
     SELECT
-        seqd.sequence_idx AS sequence,
-        seqd.sequence_idx AS hash,
+        seqd.sequence_idx AS sequence_idx,
+        seqd.sequence_idx AS hash_idx,
         seqd.sequence_order,
         sd.sample,
         COALESCE(rcd.read_count, 0) AS read_count
@@ -257,7 +257,7 @@ def generate_read_table(
 
     # extract the number of sequences
     sequence_count = read_data_store.execute(
-        "SELECT COUNT(DISTINCT hash) FROM temp_db.read_table_data"
+        "SELECT COUNT(DISTINCT hash_idx) FROM temp_db.read_table_data"
     ).fetchone()[0]
 
     # extract the sample names as they are needed regardles of output format
@@ -289,7 +289,7 @@ def generate_read_table(
                 read_data_store.execute(
                     f"""
                     CREATE OR REPLACE TABLE temp_db.pivot AS
-                        SELECT hash, sequence, {sample_columns} FROM (
+                        SELECT hash_idx, sequence_idx, {sample_columns} FROM (
                             SELECT * FROM temp_db.read_table_data
                             PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
                             ORDER BY sequence_order
@@ -297,51 +297,71 @@ def generate_read_table(
                     """
                 )
 
+                # extract the read table with correct column names
                 read_table = read_data_store.execute(
                     f"""
-                    SELECT 
-                        * 
-                    FROM main.sequence_data sd
-                    LEFT JOIN temp_db.pivot pivot
-                        ON
-                        """
+                    SELECT
+                        sd.hash,
+                        sd.sequence,
+                        {sample_columns}
+                    FROM main.sequence_data AS sd
+                    LEFT JOIN temp_db.pivot AS pt
+                        ON sd.sequence_idx = pt.sequence_idx
+                    WHERE sd.sequence != 'dummy_seq'
+                    ORDER BY sd.sequence_order
+                    """
                 ).df()
-                print(read_table)
-                # # define the output path
-                # output_file_name_xlsx = Path(
-                #     output_folder.joinpath(
-                #         f"0_{project_name}_{sequence_type}_read_table_part_{idx}.xlsx"
-                #     )
-                # )
 
-                # # write the output, give user output
-                # read_table.to_excel(
-                #     output_file_name_xlsx, index=False, engine="xlsxwriter"
-                # )
+                # define the output path
+                output_file_name_xlsx = Path(
+                    output_folder.joinpath(
+                        f"0_{project_name}_{sequence_type}_read_table_part_{idx}.xlsx"
+                    )
+                )
 
-    # # always write output to parquet
-    # sample_selector = ", ".join(f"'{sample}'" for sample in sample_names)
-    # sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
+                # write the output, give user output
+                read_table.to_excel(
+                    output_file_name_xlsx, index=False, engine="xlsxwriter"
+                )
 
-    # # define the output file name
-    # output_file_name_parquet = Path(
-    #     output_folder.joinpath(
-    #         f"0_{project_name}_{sequence_type}_read_table.parquet.snappy"
-    #     )
-    # )
+    # always write output to parquet
+    sample_selector = ", ".join(f"'{sample}'" for sample in sample_names)
+    sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
 
-    # # pivot the read_table data and write to parquet
-    # read_data_store.execute(
-    #     f"""
-    #     COPY (
-    #         SELECT hash, sequence, {sample_columns} FROM (
-    #             SELECT * FROM temp_db.read_table_data
-    #             PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
-    #             ORDER BY sequence_order
-    #         )
-    #     ) TO '{output_file_name_parquet}' (FORMAT 'parquet')
-    #     """
-    # )
+    # define the output file name
+    output_file_name_parquet = Path(
+        output_folder.joinpath(
+            f"0_{project_name}_{sequence_type}_read_table.parquet.snappy"
+        )
+    )
+
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.pivot AS
+            SELECT hash_idx, sequence_idx, {sample_columns} FROM (
+                SELECT * FROM temp_db.read_table_data
+                PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
+                ORDER BY sequence_order
+            )
+        """
+    )
+
+    # extract the read table with correct column names
+    read_table = read_data_store.execute(
+        f"""
+        COPY (
+            SELECT
+                sd.hash,
+                sd.sequence,
+                {sample_columns}
+            FROM main.sequence_data AS sd
+            LEFT JOIN temp_db.pivot AS pt
+                ON sd.sequence_idx = pt.sequence_idx
+            WHERE sd.sequence != 'dummy_seq'
+            ORDER BY sd.sequence_order
+        ) TO '{output_file_name_parquet}' (FORMAT 'parquet')
+        """
+    )
 
     # close the connection
     read_data_store.close()
@@ -377,6 +397,10 @@ def main(project=Path.cwd()):
 
     # find out which dataset to load
     prior_step = choose_input(project, "11_generate_read_table")
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Last analysis step was {prior_step}. Using data from this step."
+    )
 
     # collect the input for read table generation
     # generate a data folder to save the hdf store
