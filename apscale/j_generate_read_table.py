@@ -381,7 +381,7 @@ def generate_read_table(
     print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table.")
 
     # chunk the data
-    max_pivot_cells = 10_000_000
+    max_pivot_cells = 25_000_000  # reasonable for a 32 Gb machine
     max_rows_per_chunk = max(1000, max_pivot_cells // len(sample_names))
 
     # collect the sequence ids
@@ -389,25 +389,55 @@ def generate_read_table(
         "SELECT sequence_idx FROM main.sequence_data"
     ).fetchall()
     sequence_ids = [row[0] for row in sequence_ids]
+    sequence_chunks = more_itertools.chunked(sequence_ids, max_rows_per_chunk)
 
-    read_data_store.execute(
-        f"""
-        CREATE OR REPLACE TABLE temp_db.pivot AS
-            SELECT sequence_idx, {sample_columns} 
-            FROM (
-                SELECT sequence_idx, sample, read_count
-                FROM temp_db.read_table_data
+    # write output to parquet in chunks
+    for i, chunk in enumerate(sequence_chunks, start=1):
+        min_idx, max_idx = min(chunk), max(chunk)
+
+        # create a temp filename for output
+        temp_filename = Path(temp_folder.joinpath(f"pivot_chunk_{i}.parquet.snappy"))
+
+        # perform the pivot for this chunk
+        read_data_store.execute(
+            f"""
+            COPY (
+                SELECT sequence_idx, {sample_columns}
+                FROM (
+                    SELECT sequence_idx, sample, read_count
+                    FROM temp_db.read_table_data
+                    WHERE sequence_idx BETWEEN {min_idx} AND {max_idx}
                 )
                 PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
+            )
+            TO '{temp_filename}' (FORMAT PARQUET)
+            """
+        )
 
-        """
-    )
+        # give user output
+        print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Chunk {i} processed.")
 
     print(
         f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes, sequences and ordering table and writing parquet output."
     )
 
+    # create the parquet path to read the chunks from
+    parquet_path = Path(temp_folder.joinpath("pivot_chunk_*.parquet.snappy"))
+
     # extract the read table with correct column names
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.pivot AS 
+            SELECT * FROM read_parquet('{parquet_path}')
+        """
+    )
+
+    # remove the parquet files
+    for file in temp_folder.glob("pivot_chunk_*.parquet.snappy"):
+        if file.is_file():
+            file.unlink()
+
+    # build the final read_table
     read_table = read_data_store.execute(
         f"""
         COPY (
@@ -530,3 +560,9 @@ def main(project=Path.cwd()):
     generate_read_table(
         project_name, data_path, database_path, "sequence", temp_path, to_excel
     )
+
+    # sequence grouping
+
+    # fasta for sequence groups
+
+    # read table for sequence groups
