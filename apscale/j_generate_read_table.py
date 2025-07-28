@@ -1,4 +1,4 @@
-import glob, os, datetime, gzip, duckdb, hashlib, more_itertools, sys
+import glob, os, datetime, gzip, duckdb, hashlib, more_itertools, sys, subprocess
 import pandas as pd
 from joblib import Parallel, delayed
 from pathlib import Path
@@ -452,11 +452,61 @@ def generate_read_table(
     temp_db.unlink()
 
 
-def generate_sequence_groups(project_name, data_path, database_path, temp_path):
+def generate_sequence_groups(
+    project_name, data_path, database_path, temp_path, group_threshold
+):
     # create the savename for the sequence fasta
     sequence_fasta = Path(data_path).joinpath(f"0_{project_name}_sequences.fasta")
+    matchfile_path = Path(temp_path).joinpath(
+        f"{project_name}_{group_threshold}_matchfile.tsv"
+    )
 
-    print(sequence_fasta)
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Computing matchfile with vsearch."
+    )
+
+    # compute the matchfile with vsearch
+    subprocess.run(
+        [
+            "vsearch",
+            "--usearch_global",
+            sequence_fasta,
+            "--db",
+            sequence_fasta,
+            "--id",
+            str(group_threshold),
+            "--userout",
+            matchfile_path,
+            "--quiet",
+            "--userfields",
+            "query+target+id",
+            "--maxaccepts",
+            str(0),
+            "--self",
+        ]
+    )
+
+    # ingest into duck db temp file to then join in data
+    read_data_store = duckdb.connect(database_path)
+    temp_db = Path(temp_path).joinpath("temp.duckdb")
+    read_data_store.execute(f"ATTACH '{temp_db}' as temp_db")
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.matchfile_temp AS
+        SELECT * FROM read_csv('{matchfile_path}',
+            delim = '\\t',
+            header = False,
+            columns = {{
+                'query': 'STRING',
+                'target': 'STRING',
+                'pct_id': 'DOUBLE'
+            }})
+        """
+    )
+
+    read_data_store.close()
+    if temp_db.is_file():
+        temp_db.unlink()
 
 
 def main(project=Path.cwd()):
@@ -571,7 +621,9 @@ def main(project=Path.cwd()):
     # sequence grouping
     print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Grouping sequences.")
 
-    generate_sequence_groups(project_name, data_path, database_path, temp_path)
+    generate_sequence_groups(
+        project_name, data_path, database_path, temp_path, group_threshold
+    )
     # fasta for sequence groups
 
     # read table for sequence groups
