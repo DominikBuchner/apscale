@@ -452,6 +452,13 @@ def generate_read_table(
     temp_db.unlink()
 
 
+def generate_sequence_groups(project_name, data_path, database_path, temp_path):
+    # create the savename for the sequence fasta
+    sequence_fasta = Path(data_path).joinpath(f"0_{project_name}_sequences.fasta")
+
+    print(sequence_fasta)
+
+
 def main(project=Path.cwd()):
     """Main function to initially create the read table data.
 
@@ -564,6 +571,7 @@ def main(project=Path.cwd()):
     # sequence grouping
     print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Grouping sequences.")
 
+    generate_sequence_groups(project_name, data_path, database_path, temp_path)
     # fasta for sequence groups
 
     # read table for sequence groups
