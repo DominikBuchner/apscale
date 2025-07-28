@@ -1,4 +1,4 @@
-import glob, os, datetime, gzip, duckdb, hashlib, more_itertools
+import glob, os, datetime, gzip, duckdb, hashlib, more_itertools, sys
 import pandas as pd
 from joblib import Parallel, delayed
 from pathlib import Path
@@ -214,7 +214,6 @@ def generate_read_table(
     database_path: str,
     sequence_type: str,
     temp_folder: str,
-    to_excel: bool,
 ) -> None:
     """Function to generate a read table from the database. Will be split into multiple tables if data is too large.
 
@@ -280,91 +279,84 @@ def generate_read_table(
     )
 
     # if excel is used as output format compute the maximum samples per excel
-    if to_excel:
-        if sequence_count > 1_000_000:
-            print(
-                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Dataset with {sequence_count - 1:,} sequences is too large for excel. Only using parquet."
+    if sequence_count > 1_000_000:
+        print(
+            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Dataset with {sequence_count - 1:,} sequences is too large for excel. Only using parquet."
+        )
+    else:
+        print(
+            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Generating table(s) for Excel output."
+        )
+
+        # compute the maximum number of samples per file
+        chunksize = 10_000_000 // sequence_count
+
+        # fetch the sample names from read store
+        sample_names_iter = enumerate(more_itertools.chunked(sample_names, n=chunksize))
+
+        # for each chunk create a pivot table and stream it directly to excel
+        for idx, chunk in sample_names_iter:
+            sample_selector = ", ".join(f"'{sample}'" for sample in chunk)
+            sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
+
+            # select the subset of samples we are currently looking at
+            read_data_store.execute(
+                f"""
+                CREATE OR REPLACE TABLE temp_db.filtered AS  
+                    SELECT * FROM temp_db.read_table_data rtd
+                    WHERE rtd.sample IN ({sample_selector})
+                """
             )
-        else:
-            print(
-                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Generating table(s) for Excel output."
-            )
 
-            # compute the maximum number of samples per file
-            chunksize = 10_000_000 // sequence_count
+            print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table.")
 
-            # fetch the sample names from read store
-            sample_names_iter = enumerate(
-                more_itertools.chunked(sample_names, n=chunksize)
-            )
-
-            # for each chunk create a pivot table and stream it directly to excel
-            for idx, chunk in sample_names_iter:
-                sample_selector = ", ".join(f"'{sample}'" for sample in chunk)
-                sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
-
-                # select the subset of samples we are currently looking at
-                read_data_store.execute(
-                    f"""
-                    CREATE OR REPLACE TABLE temp_db.filtered AS  
-                        SELECT * FROM temp_db.read_table_data rtd
-                        WHERE rtd.sample IN ({sample_selector})
-                    """
-                )
-
-                print(
-                    f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table."
-                )
-
-                read_data_store.execute(
-                    f"""
-                    CREATE OR REPLACE TABLE temp_db.pivot AS
-                        SELECT sequence_idx, {sample_columns}
-                        FROM (
-                            SELECT sequence_idx, sample, read_count
-                            FROM temp_db.filtered
-                        )
-                        PIVOT (SUM(read_count) FOR sample IN ({sample_columns}))
-                    """
-                )
-
-                print(
-                    f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes, sequences and ordering table."
-                )
-
-                read_table = read_data_store.execute(
-                    f"""
-                    SELECT
-                        sd.hash,
-                        sd.sequence,
-                        {sample_columns}
-                    FROM main.sequence_data AS sd
-                    LEFT JOIN temp_db.pivot AS pt
-                        ON sd.sequence_idx = pt.sequence_idx
-                    WHERE sd.sequence != 'dummy_seq'
-                    ORDER BY sd.sequence_order
-                    """
-                ).df()
-
-                print(
-                    f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing Excel output file."
-                )
-
-                # define the output path
-                output_file_name_xlsx = Path(
-                    output_folder.joinpath(
-                        f"0_{project_name}_{sequence_type}_read_table_part_{idx}.xlsx"
+            read_data_store.execute(
+                f"""
+                CREATE OR REPLACE TABLE temp_db.pivot AS
+                    SELECT sequence_idx, {sample_columns}
+                    FROM (
+                        SELECT sequence_idx, sample, read_count
+                        FROM temp_db.filtered
                     )
-                )
+                    PIVOT (SUM(read_count) FOR sample IN ({sample_columns}))
+                """
+            )
 
-                # write the output, give user output
-                read_table.to_excel(
-                    output_file_name_xlsx, index=False, engine="xlsxwriter"
+            print(
+                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes, sequences and ordering table."
+            )
+
+            read_table = read_data_store.execute(
+                f"""
+                SELECT
+                    sd.hash,
+                    sd.sequence,
+                    {sample_columns}
+                FROM main.sequence_data AS sd
+                LEFT JOIN temp_db.pivot AS pt
+                    ON sd.sequence_idx = pt.sequence_idx
+                WHERE sd.sequence != 'dummy_seq'
+                ORDER BY sd.sequence_order
+                """
+            ).df()
+
+            print(
+                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing Excel output file."
+            )
+
+            # define the output path
+            output_file_name_xlsx = Path(
+                output_folder.joinpath(
+                    f"0_{project_name}_{sequence_type}_read_table_part_{idx}.xlsx"
                 )
+            )
+
+            # write the output, give user output
+            read_table.to_excel(output_file_name_xlsx, index=False, engine="xlsxwriter")
 
     # always write output to parquet
     print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Generating table(s) for parquet output."
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Generating table for parquet output."
     )
 
     # define the output file name
@@ -482,9 +474,15 @@ def main(project=Path.cwd()):
         ),
         sheet_name="11_read_table",
     )
-    perform = settings["generate read table"].item()
-    to_excel = settings["to excel"].item()
+    perform_read_table_calc = settings["generate read table"].item()
     group_threshold = settings["sequence group threshold"].item()
+
+    # check for valid group thereshold
+    if not 0 < group_threshold < 1:
+        print(
+            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Group threshold needs to be between 0 and 1."
+        )
+        sys.exit()
 
     # find out which dataset to load
     prior_step = choose_input(project, "11_generate_read_table")
@@ -554,14 +552,17 @@ def main(project=Path.cwd()):
     # create the fasta file for the sequences
     generate_fasta(project_name, data_path, database_path, "sequence")
 
-    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating read table(s).")
-
     # create the read table for the sequences
-    generate_read_table(
-        project_name, data_path, database_path, "sequence", temp_path, to_excel
-    )
+    if perform_read_table_calc:
+        print(
+            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating read table(s)."
+        )
+        generate_read_table(
+            project_name, data_path, database_path, "sequence", temp_path
+        )
 
     # sequence grouping
+    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Grouping sequences.")
 
     # fasta for sequence groups
 
