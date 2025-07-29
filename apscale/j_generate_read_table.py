@@ -33,7 +33,7 @@ def parse_fasta_data(input_path: str):
     with gzip.open(input_path, "rt") as data_stream:
         for header, seq in SimpleFastaParser(data_stream):
             header_data = header.split(";size=")
-            seq_hash, seq_count = header_data[0], int(header_data[1])
+            seq_hash, seq_count = header_data[0], int(header_data[1].rstrip(";"))
             seq = seq.upper().strip()
             yield sample_name, seq_hash, seq, seq_count
 

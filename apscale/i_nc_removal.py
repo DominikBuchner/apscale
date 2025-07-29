@@ -26,7 +26,7 @@ def max_reads_ncs(file_paths: list) -> dict:
                 # extract the id hash from the header
                 header_data = header.split(";size=")
                 # account for different size annotations from swarm and vsearch
-                seq_id, size = header_data[0], int(header_data[1].split(";")[0])
+                seq_id, size = header_data[0], int(header_data[1].rstrip(";"))
                 # recompute the hash values in case no denoising / clustering is performed
                 seq_for_hashing = seq.upper().encode("ascii")
                 hash = hashlib.sha3_256(seq_for_hashing).hexdigest()
