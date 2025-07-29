@@ -1,6 +1,7 @@
 import glob, os, datetime, gzip, duckdb, hashlib, more_itertools, sys, subprocess
 import pandas as pd
 from joblib import Parallel, delayed
+from tqdm import tqdm
 from pathlib import Path
 from apscale.a_create_project import choose_input
 from Bio.SeqIO.FastaIO import SimpleFastaParser
@@ -410,7 +411,7 @@ def generate_read_table(
         print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Chunk {i} processed.")
 
     print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes, sequences and ordering table and writing parquet output."
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes and sequences, ordering table and writing parquet output."
     )
 
     # create the parquet path to read the chunks from
@@ -507,7 +508,7 @@ def generate_sequence_groups(
     # add sequence_idx and order to the table and save in main table
     read_data_store.execute(
         f"""
-    CREATE OR REPLACE TABLE main.group_lookup_table AS
+    CREATE OR REPLACE TABLE temp_db.group_lookup_table AS
         SELECT 
             mt.query,
             mt.target,
@@ -522,6 +523,12 @@ def generate_sequence_groups(
         LEFT JOIN main.sequence_data AS sd_target
             ON mt.target = sd_target.hash
     """
+    )
+
+    # fetch the number of rows in the sequence data
+    nr_of_sequences = (
+        read_data_store.execute("SELECT COUNT(*) FROM main.sequence_data").fetchone()[0]
+        - 1
     )
 
     # fetch the ordered sequence data to loop over
@@ -539,20 +546,81 @@ def generate_sequence_groups(
     # open a second connection for the grouping operations
     grouping_connection = duckdb.connect(database_path)
 
-    while True:
-        chunk = sequence_data.fetch_df_chunk()
-        # stop when finished
-        if chunk.empty:
-            break
-        print(chunk)
-        # perform the sequence grouping
-        for sequence_idx, hash, sequence, sequence_order, read_sum in chunk.itertuples(
-            index=False
-        ):
-            # extract the matches for this sequence_idx
-            all_hash_matches = grouping_connection.execute(
-                f"SELECT * FROM group_lookup_table WHERE query_idx = {sequence_idx}"
-            ).df()
+    # create a temporary csv for pushing out the group mappings
+    mapping_csv_path = temp_path.joinpath(f"{project_name}_group_mapping.csv")
+
+    with open(mapping_csv_path, "w") as mapping_csv:
+        # give user output
+        sequence_counter = 0
+        with tqdm(total=nr_of_sequences, desc="Grouping sequences") as pbar:
+            while True:
+                chunk = sequence_data.fetch_df_chunk()
+                # stop when finished
+                if chunk.empty:
+                    break
+                # perform the sequence grouping
+                for (
+                    sequence_idx,
+                    hash,
+                    sequence,
+                    sequence_order,
+                    read_sum,
+                ) in chunk.itertuples(index=False):
+                    # extract the matches for this sequence_idx
+                    all_hash_matches = grouping_connection.execute(
+                        f"SELECT * FROM temp_db.group_lookup_table WHERE query_idx = {sequence_idx}"
+                    ).df()
+
+                    # if it is the first hit, write it to the groups found table
+                    if first:
+                        first = False
+                        # add this to the groups found table since it is by definition the first group found
+                        grouping_connection.execute(
+                            "CREATE OR REPLACE TABLE temp_db.groups_found AS SELECT * FROM all_hash_matches"
+                        )
+                        mapping_csv.write(f"{sequence_idx}\t{sequence_idx}\n")
+                        sequence_counter += 1
+                        pbar.update(1)
+                        continue
+
+                    # perform the actual grouping, select all potential matches for the current hash
+                    target_matches = grouping_connection.execute(
+                        f"""
+                        SELECT * FROM temp_db.groups_found sgf 
+                        WHERE sgf.target_idx = {sequence_idx}
+                        ORDER BY sgf.query_order LIMIT 1
+                        """
+                    ).df()
+                    # if there is not matching group, add the sequence and all target to the groups found --> it forms a new group
+                    if target_matches.empty:
+                        grouping_connection.execute(
+                            f"""
+                            INSERT INTO temp_db.groups_found SELECT * FROM all_hash_matches
+                            """
+                        )
+                        mapping_csv.write(f"{sequence_idx}\t{sequence_idx}\n")
+                        sequence_counter += 1
+                        pbar.update(1)
+                    # if there is a matching group it can be added to this group
+                    else:
+                        group_idx = target_matches["query_idx"].item()
+                        mapping_csv.write(f"{sequence_idx}\t{group_idx}\n")
+                        sequence_counter += 1
+                        pbar.update(1)
+
+    # add the group mapping to the main db
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE main.group_mapping AS
+        SELECT * FROM read_csv('{mapping_csv_path}',
+        delim = '\\t',
+        header = False,
+        columns = {{
+            'sequence_idx': 'HUGEINT',
+            'group_idx': 'HUGEINT'
+        }})                  
+        """
+    )
 
     read_data_store.close()
     grouping_connection.close()
@@ -563,6 +631,9 @@ def generate_sequence_groups(
 
     if matchfile_path.is_file():
         matchfile_path.unlink()
+
+    if mapping_csv_path.is_file():
+        mapping_csv_path.unlink()
 
 
 def main(project=Path.cwd()):
@@ -675,7 +746,9 @@ def main(project=Path.cwd()):
         )
 
     # sequence grouping
-    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Grouping sequences.")
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Starting sequence grouping with a threshold of {group_threshold}."
+    )
 
     generate_sequence_groups(
         project_name, data_path, database_path, temp_path, group_threshold
