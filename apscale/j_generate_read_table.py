@@ -28,7 +28,7 @@ def fasta_to_parquet(fasta_path: str, output_folder: str, perform_hash: bool) ->
     with gzip.open(fasta_path, "rt") as data_stream:
         for header, seq in SimpleFastaParser(data_stream):
             header_data = header.split(";size=")
-            seq_hash, seq_count = header_data[0], int(header_data[1])
+            seq_hash, seq_count = header_data[0], int(header_data[1].rstrip(";"))
 
             # only compute hash if needed
             if perform_hash:
