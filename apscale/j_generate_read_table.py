@@ -504,9 +504,65 @@ def generate_sequence_groups(
         """
     )
 
+    # add sequence_idx and order to the table and save in main table
+    read_data_store.execute(
+        f"""
+    CREATE OR REPLACE TABLE main.group_lookup_table AS
+        SELECT 
+            mt.query,
+            mt.target,
+            mt.pct_id,
+            sd_query.sequence_idx AS query_idx,
+            sd_query.sequence_order AS query_order,
+            sd_target.sequence_idx AS target_idx,
+            sd_target.sequence_order AS target_order
+        FROM temp_db.matchfile_temp AS mt
+        LEFT JOIN main.sequence_data AS sd_query
+            ON mt.query = sd_query.hash
+        LEFT JOIN main.sequence_data AS sd_target
+            ON mt.target = sd_target.hash
+    """
+    )
+
+    # fetch the ordered sequence data to loop over
+    sequence_data = read_data_store.execute(
+        f"""
+        SELECT * FROM main.sequence_data AS sd
+        WHERE sd.hash != 'dummy_hash'
+        ORDER BY sd.sequence_order
+        """
+    )
+
+    # flag to use the first sequence always as the first group
+    first = True
+
+    # open a second connection for the grouping operations
+    grouping_connection = duckdb.connect(database_path)
+
+    while True:
+        chunk = sequence_data.fetch_df_chunk()
+        # stop when finished
+        if chunk.empty:
+            break
+        print(chunk)
+        # perform the sequence grouping
+        for sequence_idx, hash, sequence, sequence_order, read_sum in chunk.itertuples(
+            index=False
+        ):
+            # extract the matches for this sequence_idx
+            all_hash_matches = grouping_connection.execute(
+                f"SELECT * FROM group_lookup_table WHERE query_idx = {sequence_idx}"
+            ).df()
+
     read_data_store.close()
+    grouping_connection.close()
+
+    # remove files no longer needed
     if temp_db.is_file():
         temp_db.unlink()
+
+    if matchfile_path.is_file():
+        matchfile_path.unlink()
 
 
 def main(project=Path.cwd()):
