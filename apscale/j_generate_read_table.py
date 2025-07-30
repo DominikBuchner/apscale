@@ -192,10 +192,13 @@ def generate_fasta(
     # establish the connection to the database
     read_data_store = duckdb.connect(database_path)
     read_data_store_cursor = read_data_store.execute(
-        f"SELECT hash, sequence FROM {sequence_type}_data WHERE sequence != 'dummy_seq' ORDER BY {sequence_type}_order"
+        f"SELECT hash, sequence FROM {sequence_type}_data WHERE sequence != 'dummy_seq' ORDER BY sequence_order"
     )
+
+    sequence_or_group = {"sequence": 0, "group": 1}
+
     output_fasta = Path(output_folder).joinpath(
-        f"0_{project_name}_{sequence_type}s.fasta"
+        f"{sequence_or_group[sequence_type]}_{project_name}_{sequence_type}s.fasta"
     )
 
     with open(output_fasta, "w") as out_stream:
@@ -231,6 +234,7 @@ def generate_read_table(
     # define the temporal database for writing intermediate steps
     temp_db = Path(temp_folder).joinpath("temp.duckdb")
     read_data_store.execute(f"ATTACH '{temp_db}' as temp_db")
+    sequence_or_group = {"sequence": 0, "group": 1}
 
     # gather some basic stats about the read store
     # extract the number of sequences, includes the dummy_seq as it is removed after pivot
@@ -333,7 +337,7 @@ def generate_read_table(
                     sd.hash,
                     sd.sequence,
                     {sample_columns}
-                FROM main.sequence_data AS sd
+                FROM main.{sequence_type}_data AS sd
                 LEFT JOIN temp_db.pivot AS pt
                     ON sd.sequence_idx = pt.sequence_idx
                 WHERE sd.sequence != 'dummy_seq'
@@ -348,7 +352,7 @@ def generate_read_table(
             # define the output path
             output_file_name_xlsx = Path(
                 output_folder.joinpath(
-                    f"0_{project_name}_{sequence_type}_read_table_part_{idx}.xlsx"
+                    f"{sequence_or_group[sequence_type]}_{project_name}_{sequence_type}_read_table_part_{idx}.xlsx"
                 )
             )
 
@@ -363,7 +367,7 @@ def generate_read_table(
     # define the output file name
     output_file_name_parquet = Path(
         output_folder.joinpath(
-            f"0_{project_name}_{sequence_type}_read_table.parquet.snappy"
+            f"{sequence_or_group[sequence_type]}_{project_name}_{sequence_type}_read_table.parquet.snappy"
         )
     )
 
@@ -454,8 +458,21 @@ def generate_read_table(
 
 
 def generate_sequence_groups(
-    project_name, data_path, database_path, temp_path, group_threshold
+    project_name: str,
+    data_path: str,
+    database_path: str,
+    temp_path: str,
+    group_threshold: float,
 ):
+    """Function to cluster sequences into groups with a fixed threshold.
+
+    Args:
+        project_name (str): Name of the Apscale project.
+        data_path (str): Path to save the final data.
+        database_path (str): Path to the duckdb database.
+        temp_path (str): Path to save temporary products.
+        group_threshold (float): Threshold to perform the grouping with.
+    """
     # create the savename for the sequence fasta
     sequence_fasta = Path(data_path).joinpath(f"0_{project_name}_sequences.fasta")
     matchfile_path = Path(temp_path).joinpath(
@@ -625,13 +642,13 @@ def generate_sequence_groups(
     # add readcounts, merge the groups
     read_data_store.execute(
         f"""
-        CREATE OR REPLACE TABLE temp_db.group_data_temp_1 AS
+        CREATE OR REPLACE TABLE temp_db.group_data_temp AS
         SELECT 
             gmt.group_idx AS sequence_idx,
             SUM(sd.read_sum) as read_sum
         FROM main.group_mapping AS gmt
         LEFT JOIN main.sequence_data sd
-            ON gmt.group_idx = sd.sequence_idx
+            ON gmt.sequence_idx = sd.sequence_idx
         GROUP BY gmt.group_idx
         """
     )
@@ -641,14 +658,14 @@ def generate_sequence_groups(
         f"""
         CREATE OR REPLACE TABLE main.group_data AS
         SELECT
-            gdt1.sequence_idx,
+            gdt.sequence_idx,
             sd.hash,
             sd.sequence,
-            row_number() OVER (ORDER BY gdt1.read_sum DESC) AS sequence_order,
-            gdt1.read_sum
-        FROM temp_db.group_data_temp_1 AS gdt1
+            row_number() OVER (ORDER BY gdt.read_sum DESC) AS sequence_order,
+            gdt.read_sum
+        FROM temp_db.group_data_temp AS gdt
         LEFT JOIN main.sequence_data AS sd
-            ON gdt1.sequence_idx = sd.sequence_idx
+            ON gdt.sequence_idx = sd.sequence_idx
         """
     )
 
@@ -661,7 +678,32 @@ def generate_sequence_groups(
     )
 
     # update the sequence_idx column in sequence_read_count_data with group_idx
+    # coalesce to include the dummy hash / dummy seq
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.group_data_temp AS
+        SELECT 
+            srcd.sample_idx,
+            COALESCE(gm.group_idx, srcd.sequence_idx) AS sequence_idx,
+            srcd.read_count
+        FROM main.sequence_read_count_data AS srcd
+        LEFT JOIN main.group_mapping AS gm
+            ON srcd.sequence_idx = gm.sequence_idx
+        """
+    )
+
     # groupby sample_idx (any), sequence_idx (any), sum(read_count)
+    read_data_store.execute(
+        f"""
+    CREATE OR REPLACE TABLE main.group_read_count_data AS
+        SELECT
+            gdt.sample_idx,
+            gdt.sequence_idx,
+            SUM(gdt.read_count) AS read_count
+        FROM temp_db.group_data_temp AS gdt
+        GROUP BY gdt.sample_idx, gdt.sequence_idx
+    """
+    )
 
     read_data_store.close()
     grouping_connection.close()
@@ -675,6 +717,50 @@ def generate_sequence_groups(
 
     if mapping_csv_path.is_file():
         mapping_csv_path.unlink()
+
+
+def write_log(logfile_base_path: str, database_path: str):
+    """Function to log the group mapping.
+
+    Args:
+        logfile_base_path (str): Path to the logfile to write to.
+        database_path (str): Path to the duckdb database
+    """
+    # connect to the read data store
+    read_data_store = duckdb.connect(database_path)
+
+    logfile_cursor = read_data_store.execute(
+        f"""
+        SELECT
+            gm.group_idx,
+            sd.hash,
+            gm.sequence_idx,
+            sd.read_sum,
+        FROM group_mapping AS gm
+        LEFT JOIN sequence_data AS sd
+            ON gm.sequence_idx = sd.sequence_idx
+        LEFT JOIN group_data AS gd
+            ON gm.group_idx = gd.sequence_idx
+        ORDER BY gd.sequence_order, sd.read_sum DESC
+        """
+    )
+
+    # keep track of the files written to far
+    file_nr = 1
+
+    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing logs.")
+
+    while True:
+        # fetch 100 x 2048 rows for each sub log
+        chunk = logfile_cursor.fetch_df_chunk(100)
+        if chunk.empty:
+            break
+
+        # generate a logfile name if multiple logs have to be written
+        logfile_name = Path(logfile_base_path).joinpath(
+            f"Logfile_11_read_table_part_{file_nr}.xlsx"
+        )
+        chunk.to_excel(logfile_name, engine="xlsxwriter", index=False)
 
 
 def main(project=Path.cwd()):
@@ -703,7 +789,7 @@ def main(project=Path.cwd()):
     group_threshold = settings["sequence group threshold"].item()
 
     # check for valid group thereshold
-    if not 0 < group_threshold < 1:
+    if not 0 < group_threshold <= 1:
         print(
             f"{datetime.datetime.now().strftime('%H:%M:%S')}: Group threshold needs to be between 0 and 1."
         )
@@ -733,6 +819,7 @@ def main(project=Path.cwd()):
     temp_path = Path(project).joinpath("11_read_table", "temp")
     project_name = Path(project).stem.replace("_apscale", "")
     database_path = data_path.joinpath(f"{project_name}_read_data_storage.duckdb")
+    logfile_base_path = Path(project).joinpath("11_read_table")
 
     # check if there is an old db, remove it if it is
     if database_path.is_file():
@@ -794,6 +881,26 @@ def main(project=Path.cwd()):
     generate_sequence_groups(
         project_name, data_path, database_path, temp_path, group_threshold
     )
-    # fasta for sequence groups
 
-    # read table for sequence groups
+    # sequence grouping
+    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Grouping finished.")
+
+    # fasta for sequence groups
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating fasta file for sequence groups."
+    )
+    generate_fasta(project_name, data_path, database_path, "group")
+
+    # create the read table for the groups
+    if perform_read_table_calc:
+        print(
+            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating read table(s)."
+        )
+        generate_read_table(project_name, data_path, database_path, "group", temp_path)
+
+    # finally write a human readable log for the group mapping
+    write_log(logfile_base_path, database_path)
+
+    # remove the temporary folder
+    if temp_path.is_dir():
+        temp_path.rmdir()
