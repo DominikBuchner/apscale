@@ -622,6 +622,47 @@ def generate_sequence_groups(
         """
     )
 
+    # add readcounts, merge the groups
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.group_data_temp_1 AS
+        SELECT 
+            gmt.group_idx AS sequence_idx,
+            SUM(sd.read_sum) as read_sum
+        FROM main.group_mapping AS gmt
+        LEFT JOIN main.sequence_data sd
+            ON gmt.group_idx = sd.sequence_idx
+        GROUP BY gmt.group_idx
+        """
+    )
+
+    # add hash and sequence
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE main.group_data AS
+        SELECT
+            gdt1.sequence_idx,
+            sd.hash,
+            sd.sequence,
+            row_number() OVER (ORDER BY gdt1.read_sum DESC) AS sequence_order,
+            gdt1.read_sum
+        FROM temp_db.group_data_temp_1 AS gdt1
+        LEFT JOIN main.sequence_data AS sd
+            ON gdt1.sequence_idx = sd.sequence_idx
+        """
+    )
+
+    nr_of_groups = read_data_store.execute(
+        "SELECT COUNT(*) FROM main.group_data"
+    ).fetchone()[0]
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Found {nr_of_groups} sequence groups. Updating read data storage."
+    )
+
+    # update the sequence_idx column in sequence_read_count_data with group_idx
+    # groupby sample_idx (any), sequence_idx (any), sum(read_count)
+
     read_data_store.close()
     grouping_connection.close()
 
