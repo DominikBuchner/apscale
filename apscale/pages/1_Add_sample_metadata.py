@@ -69,15 +69,80 @@ def get_missing_values(
             f"""
             SELECT sd.sample
             FROM sample_data AS sd
-            JOIN read_parquet('{metadata_parquet}') AS mp
-                ON sd.sample = mp.{sample_identifier}
-            WHERE sd.sample IS DISTINCT FROM mp.{sample_identifier}
+            WHERE sd.sample NOT IN (
+                SELECT {sample_identifier}
+                FROM read_parquet('{metadata_parquet}')
+            )
             """
         ).df()
-    except duckdb.ConversionException:
+    except (duckdb.ConversionException, duckdb.BinderException):
         st.write("Please select a column that contains strings.")
+        # return a dummy df
+        return pd.DataFrame([[1]], columns=["A"])
+    if not missing_values.empty:
+        st.text("Samples IDs missing in the provided metadata column:")
+        st.write(missing_values)
+    else:
+        st.success(
+            "The provided identifier matches the samples in the read store!",
+            icon="✅",
+        )
 
     return missing_values
+
+
+def display_column_datatypes(metadata_parquet: str):
+    # read the first row of the parquet via duckdb to collect the datatypes and names
+    memory = duckdb.connect(":memory:")
+    memory.execute(
+        f"CREATE VIEW temp_view AS SELECT * FROM read_parquet('{metadata_parquet}')"
+    )
+    info = memory.execute("PRAGMA table_info('temp_view')").fetchdf()
+    col_to_types = dict(zip(info["name"], info["type"]))
+    human_read_types = {
+        "VARCHAR": "string",
+        "DOUBLE": "floating point number",
+        "BIGINT": "integer",
+        "BOOLEAN": "boolean",
+        "TIMESTAMP_NS": "timestamp",
+    }
+
+    # invert for user selected back conversion
+    inverted_types = {v: k for k, v in human_read_types.items()}
+
+    # store the fields to include here
+    include_columns = {}
+    selected_dtypes = {}
+
+    for field_name in info["name"]:
+        col1, col2, col3 = st.columns([2, 2, 2])
+        with col1:
+            st.write(f"**{field_name}**")
+        with col2:
+            include_columns[field_name] = st.checkbox(
+                "Include", value=True, key=field_name
+            )
+        with col3:
+            selected_dtypes[field_name] = st.multiselect(
+                "Data type",
+                options=inverted_types.keys(),
+                key=f"{field_name}_type",
+                max_selections=1,
+                default=human_read_types[col_to_types[field_name]],
+                disabled=not include_columns[field_name],
+            )
+
+    # generate a preview
+    preview_columns = info["name"].to_list()
+    preview_columns = ", ".join(
+        f'"{name}"' for name in preview_columns if include_columns[name]
+    )
+    preview = memory.execute(
+        f"""
+        SELECT {preview_columns} FROM read_parquet('{metadata_parquet}') LIMIT 5
+        """
+    ).df()
+    st.write(preview)
 
 
 def main():
@@ -143,6 +208,10 @@ def main():
                 metadata_parquet,
                 sample_identifier,
             )
+
+            if missing_values.empty:
+                st.write("Please select the correct datatype for each column.")
+                display_column_datatypes(metadata_parquet)
 
 
 main()
