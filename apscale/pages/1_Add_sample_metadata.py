@@ -130,6 +130,7 @@ def display_column_datatypes(metadata_parquet: str):
                 max_selections=1,
                 default=human_read_types[col_to_types[field_name]],
                 disabled=not include_columns[field_name],
+                placeholder="Choose datatype",
             )
 
     # generate a preview
@@ -142,7 +143,15 @@ def display_column_datatypes(metadata_parquet: str):
         SELECT {preview_columns} FROM read_parquet('{metadata_parquet}') LIMIT 5
         """
     ).df()
+    st.write("**Current selection:**")
     st.write(preview)
+
+    print(selected_dtypes)
+    # return if no field is empty
+    if all(selected_dtypes.values()):
+        return True
+    else:
+        return False
 
 
 def main():
@@ -211,7 +220,7 @@ def main():
 
             if missing_values.empty:
                 st.write("Please select the correct datatype for each column.")
-                display_column_datatypes(metadata_parquet)
+                valid_input = display_column_datatypes(metadata_parquet)
 
 
 main()
