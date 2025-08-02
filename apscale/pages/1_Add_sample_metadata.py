@@ -19,6 +19,7 @@ def sample_metadata_present(read_data_to_modify: str) -> bool:
     # look for the sample metadata table
     try:
         read_data_store.execute("SELECT * FROM sample_metadata LIMIT 1")
+        return True
     except duckdb.CatalogException:
         return False
 
@@ -146,12 +147,74 @@ def display_column_datatypes(metadata_parquet: str):
     st.write("**Current selection:**")
     st.write(preview)
 
-    print(selected_dtypes)
     # return if no field is empty
     if all(selected_dtypes.values()):
-        return True
+        # transform single selection list values from multiselect back to regular values
+        selected_dtypes = {k: v[0] for k, v in selected_dtypes.items()}
+        selected_dtypes = {k: inverted_types[v] for k, v in selected_dtypes.items()}
+        selected_dtypes = {
+            k: selected_dtypes[k]
+            for k in selected_dtypes.keys()
+            if k in preview_columns
+        }
+        return True, selected_dtypes
     else:
-        return False
+        return False, {}
+
+
+def save_to_read_store(
+    read_data_to_modify: str,
+    metadata_parquet: str,
+    columns_dict: dict,
+    sample_identifier: str,
+):
+    """Function to save the uploaded metadata to the read store.
+
+    Args:
+        read_data_to_modify (str): Path to the read data to modify.
+        metadata_parquet(str): Path to the uploaded parquet metadata.
+        columns_dict (dict): Dict that holds column names and data types
+        sample_identifier (str): Column that holds the sample names matching the sample data
+    """
+    # establish the connection
+    read_data_store = duckdb.connect(read_data_to_modify)
+
+    # create the view into the parquet file
+    select_clause = ", \n".join(
+        [f"CAST({col} AS {dtype}) AS {col}" for col, dtype in columns_dict.items()]
+    )
+
+    read_data_store.execute(
+        f"""
+    CREATE OR REPLACE VIEW parquet_data AS
+    SELECT {select_clause}
+    FROM read_parquet('{metadata_parquet}')
+    """
+    )
+
+    # build a selector for the columns included
+    columns_selector = ", ".join(
+        ["sample_idx", "sample"]
+        + [key for key in columns_dict.keys() if key != sample_identifier]
+    )
+
+    # join with the sample idx
+    read_data_store.execute(
+        f"""
+    CREATE OR REPLACE TABLE sample_metadata AS 
+    (
+        SELECT {columns_selector} FROM sample_data AS sd
+        LEFT JOIN parquet_data AS pd
+            ON sd.sample = pd.{sample_identifier}
+    )
+    """
+    )
+
+    # remove the parquet
+    metadata_parquet.unlink()
+
+    # close the connection in the end
+    read_data_store.close()
 
 
 def main():
@@ -220,7 +283,29 @@ def main():
 
             if missing_values.empty:
                 st.write("Please select the correct datatype for each column.")
-                valid_input = display_column_datatypes(metadata_parquet)
+                # here we get the columns and dtypes for storing the data in duckdb
+                valid_input, columns_dict = display_column_datatypes(metadata_parquet)
+
+            if valid_input:
+                save_to_store = st.button("Save to read data store", type="primary")
+            else:
+                st.button("Save to read data store", type="primary", disabled=True)
+                save_to_store = False
+
+            if save_to_store:
+                save_to_read_store(
+                    st.session_state["read_data_to_modify"],
+                    metadata_parquet,
+                    columns_dict,
+                    sample_identifier,
+                )
+
+    if metadata_present:
+        # display metadata
+
+        # button to reset metadata
+
+        pass
 
 
 main()
