@@ -49,7 +49,10 @@ def collect_column_names(metadata_parquet: str) -> list:
         f"SELECT * FROM read_parquet('{metadata_parquet}') LIMIT 1"
     ).df()
     memory.close()
-    return column_names.columns.to_list()
+    column_names = [
+        col for col in column_names.columns.to_list() if not col.startswith("__")
+    ]
+    return column_names
 
 
 def get_missing_values(
@@ -73,6 +76,7 @@ def get_missing_values(
             WHERE sd.sample NOT IN (
                 SELECT {sample_identifier}
                 FROM read_parquet('{metadata_parquet}')
+                WHERE "{sample_identifier}" IS NOT NULL
             )
             """
         ).df()
@@ -99,6 +103,7 @@ def display_column_datatypes(metadata_parquet: str):
         f"CREATE VIEW temp_view AS SELECT * FROM read_parquet('{metadata_parquet}')"
     )
     info = memory.execute("PRAGMA table_info('temp_view')").fetchdf()
+    info = info.loc[~info["name"].str.startswith("__")]
     col_to_types = dict(zip(info["name"], info["type"]))
     human_read_types = {
         "VARCHAR": "string",
@@ -181,7 +186,7 @@ def save_to_read_store(
 
     # create the view into the parquet file
     select_clause = ", \n".join(
-        [f"CAST({col} AS {dtype}) AS {col}" for col, dtype in columns_dict.items()]
+        [f'CAST("{col}" AS {dtype}) AS "{col}"' for col, dtype in columns_dict.items()]
     )
 
     read_data_store.execute(
@@ -195,7 +200,7 @@ def save_to_read_store(
     # build a selector for the columns included
     columns_selector = ", ".join(
         ["sample_idx", "sample"]
-        + [key for key in columns_dict.keys() if key != sample_identifier]
+        + [f'"{key}"' for key in columns_dict.keys() if key != sample_identifier]
     )
 
     # join with the sample idx
@@ -215,6 +220,37 @@ def save_to_read_store(
 
     # close the connection in the end
     read_data_store.close()
+
+
+def display_metadata_preview(read_data_to_modifiy, n_rows) -> pd.DataFrame:
+    """Function to display a preview of the metadata
+
+    Args:
+        read_data_to_modifiy (_type_): Path to the read store.
+        n_rows (_type_): Number of rows to return.
+
+    Returns:
+        pd.DataFrame: Returns the preview as a dataframe to directly display in streamlit
+    """
+    read_data_to_modify = duckdb.connect(read_data_to_modifiy)
+    preview = read_data_to_modify.execute(
+        f"SELECT * FROM sample_metadata LIMIT {n_rows}"
+    ).df()
+    read_data_to_modify.close()
+
+    return preview
+
+
+def reset_metadata_table(read_data_to_modify):
+    """Function to reset the metadata from the duckdb table.
+
+    Args:
+        read_data_to_modify (_type_): Path to the read data store.
+    """
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    # remove the sample metadata
+    read_data_to_modify.execute("DROP TABLE sample_metadata")
+    read_data_to_modify.close()
 
 
 def main():
@@ -286,26 +322,42 @@ def main():
                 # here we get the columns and dtypes for storing the data in duckdb
                 valid_input, columns_dict = display_column_datatypes(metadata_parquet)
 
-            if valid_input:
-                save_to_store = st.button("Save to read data store", type="primary")
-            else:
-                st.button("Save to read data store", type="primary", disabled=True)
-                save_to_store = False
+                if valid_input:
+                    save_to_store = st.button("Save to read data store", type="primary")
+                else:
+                    st.button("Save to read data store", type="primary", disabled=True)
+                    save_to_store = False
 
-            if save_to_store:
-                save_to_read_store(
-                    st.session_state["read_data_to_modify"],
-                    metadata_parquet,
-                    columns_dict,
-                    sample_identifier,
-                )
+                if save_to_store:
+                    save_to_read_store(
+                        st.session_state["read_data_to_modify"],
+                        metadata_parquet,
+                        columns_dict,
+                        sample_identifier,
+                    )
+                    st.rerun()
 
     if metadata_present:
         # display metadata
+        st.write("Sample metadata is already present in the read data store.")
+        preview_rows = st.number_input("Rows to display in preview", min_value=5)
+
+        if preview_rows:
+            preview = display_metadata_preview(
+                st.session_state["read_data_to_modify"], preview_rows
+            )
+            st.write(preview)
 
         # button to reset metadata
+        reset_metadata = st.button(
+            "Reset sample metadata",
+            help="This will remove the current metadata table",
+            type="primary",
+        )
 
-        pass
+        if reset_metadata:
+            reset_metadata_table(st.session_state["read_data_to_modify"])
+            st.rerun()
 
 
 main()

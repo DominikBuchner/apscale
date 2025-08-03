@@ -173,7 +173,7 @@ def main(project=Path.cwd()):
     ) = get_metadata_info(st.session_state["read_data_to_modify"])
 
     st.write(
-        f"This project currently contains **{sample_metadata_cols} sample metadata fields** and **{sequence_metadata_cols} sequence metadata fields**."
+        f"This project currently contains **{sample_metadata_cols - 2} sample metadata fields** and **{sequence_metadata_cols - 5} sequence metadata fields**."
     )
 
     message = f"""
