@@ -156,7 +156,7 @@ def display_column_datatypes(metadata_parquet: str):
         SELECT {preview_columns} FROM read_parquet('{metadata_parquet}') LIMIT 5
         """
     ).df()
-    st.write("**Current selection:**")
+    st.write("**Current selection preview:**")
     st.write(preview)
 
     # return if no field is empty
@@ -208,17 +208,6 @@ def save_to_read_store(
     columns_selector = ", ".join(
         ["sequence_idx", "hash", "sequence", "sequence_order", "read_sum"]
         + [f'"{key}"' for key in columns_dict.keys() if key != sequence_identifier]
-    )
-
-    print(
-        f"""
-    CREATE OR REPLACE TABLE sequence_metadata AS 
-    (
-        SELECT {columns_selector} FROM sequence_data AS sd
-        LEFT JOIN parquet_data AS pd
-            ON sd.hash = pd.{sequence_identifier}
-    )
-    """
     )
 
     # join with the sample idx

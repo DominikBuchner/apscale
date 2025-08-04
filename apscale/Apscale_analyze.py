@@ -78,7 +78,7 @@ def get_metadata_info(read_data_to_modify: str) -> tuple:
         sample_metadata = read_data_store.execute(
             "SELECT * FROM sample_metadata LIMIT 1"
         ).df()
-        sample_metadata_cols = len(sample_metadata.columns)
+        sample_metadata_cols = len(sample_metadata.columns) - 2
     except duckdb.CatalogException:
         pass
 
@@ -87,7 +87,7 @@ def get_metadata_info(read_data_to_modify: str) -> tuple:
         sequence_metadata = read_data_store.execute(
             "SELECT * FROM sequence_metadata LIMIT 1"
         ).df()
-        sequence_metadata_cols = len(sequence_metadata.columns)
+        sequence_metadata_cols = len(sequence_metadata.columns) - 5
 
         # check if one of the gbif validation modules has been run already
         if "gbif_taxonomy" in sequence_metadata.columns:
@@ -173,7 +173,7 @@ def main(project=Path.cwd()):
     ) = get_metadata_info(st.session_state["read_data_to_modify"])
 
     st.write(
-        f"This project currently contains **{sample_metadata_cols - 2} sample metadata fields** and **{sequence_metadata_cols - 5} sequence metadata fields**."
+        f"This project currently contains **{sample_metadata_cols} sample metadata fields** and **{sequence_metadata_cols} sequence metadata fields**."
     )
 
     message = f"""

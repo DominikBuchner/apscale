@@ -1,0 +1,249 @@
+import duckdb, pyproj
+import pandas as pd
+import pathlib
+from joblib import Parallel, delayed
+import streamlit as st
+from pathlib import Path
+from shapely.geometry import MultiPoint
+from shapely.ops import transform
+from shapely.geometry.polygon import orient
+from shapely import wkt
+
+
+def check_metadata(read_data_to_modify):
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    # check for sequence metadata
+    try:
+        read_data_to_modify.execute("SELECT * FROM sequence_metadata LIMIT 1")
+        sequence_metadata = True
+    except duckdb.CatalogException:
+        sequence_metadata = False
+
+    # check for sample metadata
+    try:
+        read_data_to_modify.execute("SELECT * FROM sample_metadata LIMIT 1")
+        sample_metadata = True
+    except duckdb.CatalogException:
+        sample_metadata = False
+
+    # check for gbif taxonomy
+    try:
+        read_data_to_modify.execute(
+            "SELECT gbif_taxonomy FROM sequence_metadata LIMIT 1"
+        )
+        gbif_taxonomy = True
+    except duckdb.BinderException:
+        gbif_taxonomy = False
+
+    read_data_to_modify.close()
+
+    return sequence_metadata, sample_metadata, gbif_taxonomy
+
+
+def collect_sample_metadata_cols(read_data_to_modify: str) -> list:
+    # create the connection
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    info = read_data_to_modify.execute("PRAGMA table_info(sample_metadata)").df()
+    read_data_to_modify.close()
+    return info["name"].to_list()
+
+
+def generate_file_preview(
+    read_data_to_modify: str, lat_col: str, lon_col: str
+) -> pd.DataFrame:
+    # create the connection
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    preview_frame = read_data_to_modify.execute(
+        f"""
+        SELECT 
+            sample_idx,
+            sample,
+            {lat_col},
+            {lon_col}
+        FROM sample_metadata    
+        LIMIT 20
+        """
+    ).df()
+
+    return preview_frame
+
+
+def compute_wkt_string(read_data_to_modify, sequence_idx, radius, lat_col, lon_col):
+    # establish a new connection
+    con = duckdb.connect(read_data_to_modify, read_only=True)
+    data = con.execute(
+        f"""SELECT
+            "{lat_col}", 
+            "{lon_col}"
+            FROM temp_db.distribution_data
+            WHERE sequence_idx = {sequence_idx}
+        """
+    ).df()
+
+    # extract the coordinates
+    coords = list(zip(data[lat_col], data[lon_col]))
+
+    # compute the multiploint
+    mp = MultiPoint(coords)
+    hull = mp.convex_hull
+
+    # change projection to expand by kilometers
+    project = pyproj.Transformer.from_crs(
+        "EPSG:4326", "EPSG:3857", always_xy=True
+    ).transform
+    hull_metric = transform(project, hull)
+    buffered = hull_metric.buffer(radius * 1000)
+
+    project_back = pyproj.Transformer.from_crs(
+        "EPSG:3857", "EPSG:4326", always_xy=True
+    ).transform
+    buffered_geo = transform(project_back, buffered)
+    buffered_geo = orient(buffered_geo, sign=1).wkt
+
+    return buffered_geo
+
+
+def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius):
+    # create a temp path to save intermediate results
+    temp_folder = read_data_to_modify.parent.parent.joinpath("temp")
+    temp_folder.mkdir(exist_ok=True)
+    connection_path = read_data_to_modify
+
+    # connect to database
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    temp_db = Path(temp_folder).joinpath("temp.duckdb")
+    read_data_to_modify.execute(f"ATTACH '{temp_db}' as temp_db")
+
+    # collect the read count data and join in the required sequence metadata
+    read_data_to_modify.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.distribution_data AS 
+        SELECT 
+            srcd.sequence_idx,
+            srcd.sample_idx, 
+            smd.sequence_order,
+            smd.gbif_taxonomy,
+            samd."{lat_col}",
+            samd."{lon_col}"  
+        FROM main.sequence_read_count_data srcd
+        LEFT JOIN main.sequence_metadata smd
+            ON srcd.sequence_idx = smd.sequence_idx
+        LEFT JOIN main.sample_metadata samd
+            ON srcd.sample_idx = samd.sample_idx
+        WHERE smd.gbif_taxonomy IS NOT NULL 
+        """
+    )
+
+    # close connection that can be used for writing
+    read_data_to_modify.close()
+
+    # open a new read_only connection
+    read_only = duckdb.connect(temp_db, read_only=True)
+
+    # fetch all distinct sequence_idx values from there
+    distinct_sequences = read_only.execute(
+        "SELECT DISTINCT sequence_idx FROM temp_db.distribution_data"
+    )
+
+    chunk_count = 1
+
+    # loop over in chunks
+    while True:
+        data_chunk = distinct_sequences.fetch_df_chunk(1)
+        if data_chunk.empty:
+            break
+        else:
+            # process each chunk seperately. data inside the chunk can be processed in parallel
+            wkts = Parallel(n_jobs=-2)(
+                delayed(compute_wkt_string)(temp_db, idx, radius, lat_col, lon_col)
+                for idx in data_chunk["sequence_idx"]
+            )
+            # create a dataframe with idx wkt
+            wkt_df = pd.DataFrame(data=zip(data_chunk["sequence_idx"], wkts))
+            # save to parquet for intermediate results
+            output_file_name = temp_folder.joinpath(
+                f"wkt_chunk_{chunk_count}.parquet.snappy"
+            )
+            chunk_count += 1
+            wkt_df.to_parquet(output_file_name)
+
+    # ingest parquet files into duckdb for temporary display of data
+
+
+def main():
+    # prevent page from scroling up on click
+    st.markdown(
+        """
+    <style>
+        * {
+        overflow-anchor: none !important;
+        }
+    </style>""",
+        unsafe_allow_html=True,
+    )
+
+    # header
+    st.title("Validate species names via GBIF record search")
+    st.write("This module needs sample metadata (lat, lon) for each sample.")
+    st.write("This module needs harmonized GBIF taxonomy.")
+
+    # check for the required data
+    sequence_metadata, sample_metadata, gbif_taxonomy = check_metadata(
+        st.session_state["read_data_to_modify"]
+    )
+
+    if not sequence_metadata:
+        st.write("**Please add sequence metadata first.**")
+    if not sample_metadata:
+        st.write("**Please add sample metadata first.**")
+    if not gbif_taxonomy:
+        st.write("**Please harmonize taxonomy via GBIF.**")
+
+    # if all are true display a selector for lat lon
+    if sequence_metadata and sample_metadata and gbif_taxonomy:
+        sample_meta_cols = collect_sample_metadata_cols(
+            st.session_state["read_data_to_modify"]
+        )
+
+        # display two columns
+        lat, lon = st.columns(2)
+        with lat:
+            latitude = st.selectbox(
+                label="Latitude",
+                options=sample_meta_cols,
+                help="Please select the latitude column.",
+            )
+        with lon:
+            longitude = st.selectbox(
+                label="Longitude",
+                options=sample_meta_cols,
+                help="Please select the longitude column.",
+            )
+
+        st.header("File preview")
+        st.write(
+            generate_file_preview(
+                st.session_state["read_data_to_modify"], latitude, longitude
+            )
+        )
+
+        # slider for the radius around sample points (growth of the polygon)
+        radius = st.slider(
+            label="Radius to check around sample",
+            min_value=50,
+            max_value=500,
+            value=200,
+            step=50,
+        )
+
+        compute_distributions = st.button(
+            label="Compute species distributions", type="primary"
+        )
+
+        if compute_distributions:
+            compute_species_distributions(
+                st.session_state["read_data_to_modify"], latitude, longitude, radius
+            )
+
+
+main()
