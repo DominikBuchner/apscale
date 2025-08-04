@@ -247,7 +247,7 @@ def main():
                 with st.spinner("Querying GBIF API. Hold on.", show_time=True):
                     query_gbif(st.session_state["read_data_to_modify"], species_column)
 
-            st.rerun()
+                st.rerun()
 
     if not gbif_taxonomy_available and not sequence_metadata_available:
         st.write("**Please add proper sequence metadata first.**")

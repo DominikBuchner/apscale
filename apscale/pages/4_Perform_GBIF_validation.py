@@ -100,6 +100,8 @@ def compute_wkt_string(read_data_to_modify, sequence_idx, radius, lat_col, lon_c
     buffered_geo = transform(project_back, buffered)
     buffered_geo = orient(buffered_geo, sign=1).wkt
 
+    con.close()
+
     return buffered_geo
 
 
@@ -144,7 +146,6 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
     distinct_sequences = read_only.execute(
         "SELECT DISTINCT sequence_idx FROM temp_db.distribution_data"
     )
-
     chunk_count = 1
 
     # loop over in chunks
@@ -159,15 +160,32 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
                 for idx in data_chunk["sequence_idx"]
             )
             # create a dataframe with idx wkt
-            wkt_df = pd.DataFrame(data=zip(data_chunk["sequence_idx"], wkts))
+            wkt_df = pd.DataFrame(
+                data=zip(data_chunk["sequence_idx"], wkts),
+                columns=["sequence_idx", "wkt_string"],
+            )
+            wkt_df["radius"] = radius
             # save to parquet for intermediate results
             output_file_name = temp_folder.joinpath(
                 f"wkt_chunk_{chunk_count}.parquet.snappy"
             )
             chunk_count += 1
             wkt_df.to_parquet(output_file_name)
+    # close the read only connection
+    read_only.close()
 
     # ingest parquet files into duckdb for temporary display of data
+    parquet_path = temp_folder.joinpath("wkt_*.parquet.snappy")
+
+    # open a connection to the temp.db
+    temp_db = duckdb.connect(temp_db)
+    print(
+        temp_db.execute(
+            f"""
+        SELECT * FROM read_parquet("{parquet_path}")
+        """
+        ).df()
+    )
 
 
 def main():
@@ -241,9 +259,10 @@ def main():
         )
 
         if compute_distributions:
-            compute_species_distributions(
-                st.session_state["read_data_to_modify"], latitude, longitude, radius
-            )
+            with st.spinner("Computing species distributions", show_time=True):
+                compute_species_distributions(
+                    st.session_state["read_data_to_modify"], latitude, longitude, radius
+                )
 
 
 main()
