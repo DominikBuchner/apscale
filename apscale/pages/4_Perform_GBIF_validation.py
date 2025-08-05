@@ -125,8 +125,8 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
             srcd.sample_idx, 
             smd.sequence_order,
             smd.gbif_taxonomy,
-            samd."{lat_col}",
-            samd."{lon_col}"  
+            samd."{lat_col}" AS lat,
+            samd."{lon_col}" AS lon, 
         FROM main.sequence_read_count_data srcd
         LEFT JOIN main.sequence_metadata smd
             ON srcd.sequence_idx = smd.sequence_idx
@@ -211,6 +211,54 @@ def wkt_calculated(temp_db):
         return False
 
 
+def generate_map_preview_table(temp_db) -> pd.DataFrame:
+    # open the connection
+    temp_db_con = duckdb.connect(temp_db)
+    # create a view with thejoined tables
+    temp_db_con.execute(
+        f"""
+        CREATE OR REPLACE VIEW preview_table AS 
+        SELECT 
+            DISTINCT(wkt.sequence_idx),
+            dd.gbif_taxonomy,
+            wkt.radius
+        FROM wkt_data AS wkt
+        LEFT JOIN distribution_data AS dd
+            ON wkt.sequence_idx = dd.sequence_idx
+        ORDER BY dd.gbif_taxonomy, wkt.sequence_idx
+        """
+    )
+
+    preview = temp_db_con.execute("SELECT * FROM preview_table").df()
+
+    return preview, preview["sequence_idx"].to_list()
+
+
+def select_map_data(temp_db, sequence_idx) -> pd.DataFrame:
+    # create the duckdb connection
+    temp_db_con = duckdb.connect(temp_db)
+
+    occurence_data = temp_db_con.execute(
+        f"""
+        SELECT 
+            lat, 
+            lon
+        FROM distribution_data AS dd
+        WHERE dd.sequence_idx = {sequence_idx}
+        """
+    ).df()
+    # add a label for the map
+    occurence_data["label"] = "occurence"
+
+    # extrakt the wkt from the wkt data
+    wkt = temp_db_con.execute(
+        f"""
+        SELECT * FROM wkt_data
+        WHERE sequence_idx = {sequence_idx}
+        """
+    ).df()[""]
+
+
 def main():
     # prevent page from scroling up on click
     st.markdown(
@@ -293,15 +341,24 @@ def main():
                 compute_species_distributions(
                     st.session_state["read_data_to_modify"], latitude, longitude, radius
                 )
+                # rerun to update the interface
+                st.rerun()
 
     # if the wkt strings are already computed, display the map
     if wkt_computed:
         st.write("Species distribution data detected!")
 
         # generate a preview
-
+        preview, idx_selection = generate_map_preview_table(temp_db)
+        st.write(preview)
         # select an idx to plot on map
+        idx_to_plt = st.selectbox(
+            label="Select any hash idx to plot on the map",
+            options=idx_selection,
+        )
 
+        if idx_to_plt:
+            map_data = select_map_data(temp_db, idx_to_plt)
         # option to reset the species distribution data
 
         # perform the GBIF validation algorithm
