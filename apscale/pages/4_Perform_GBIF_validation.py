@@ -179,13 +179,36 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
 
     # open a connection to the temp.db
     temp_db = duckdb.connect(temp_db)
-    print(
-        temp_db.execute(
-            f"""
-        SELECT * FROM read_parquet("{parquet_path}")
-        """
-        ).df()
+
+    # add the wkt data to the temp db
+    temp_db.execute(
+        f"""
+    CREATE OR REPLACE TABLE wkt_data AS
+    SELECT * FROM read_parquet("{parquet_path}")
+    """
     )
+
+    # remove the temp parquet files
+    for file in temp_folder.glob("wkt_*.parquet.snappy"):
+        if file.is_file():
+            file.unlink()
+
+    # close the connection
+    temp_db.close()
+
+
+def wkt_calculated(temp_db):
+    # create the path to the temp db
+    if temp_db.is_file():
+        temp_connection = duckdb.connect(temp_db)
+    else:
+        return False
+    # try to read from the table
+    try:
+        wkt_data = temp_connection.execute("SELECT * FROM wkt_data LIMIT 1")
+        return True
+    except duckdb.CatalogException:
+        return False
 
 
 def main():
@@ -199,6 +222,10 @@ def main():
     </style>""",
         unsafe_allow_html=True,
     )
+
+    # define the temp folder to look for intermediate saves
+    temp_folder = st.session_state["read_data_to_modify"].parent.parent.joinpath("temp")
+    temp_db = Path(temp_folder).joinpath("temp.duckdb")
 
     # header
     st.title("Validate species names via GBIF record search")
@@ -217,8 +244,11 @@ def main():
     if not gbif_taxonomy:
         st.write("**Please harmonize taxonomy via GBIF.**")
 
+    # check if wkt is calculated
+    wkt_computed = wkt_calculated(temp_db)
+
     # if all are true display a selector for lat lon
-    if sequence_metadata and sample_metadata and gbif_taxonomy:
+    if sequence_metadata and sample_metadata and gbif_taxonomy and not wkt_computed:
         sample_meta_cols = collect_sample_metadata_cols(
             st.session_state["read_data_to_modify"]
         )
@@ -263,6 +293,23 @@ def main():
                 compute_species_distributions(
                     st.session_state["read_data_to_modify"], latitude, longitude, radius
                 )
+
+    # if the wkt strings are already computed, display the map
+    if wkt_computed:
+        st.write("Species distribution data detected!")
+
+        # generate a preview
+
+        # select an idx to plot on map
+
+        # option to reset the species distribution data
+
+        # perform the GBIF validation algorithm
+
+        # infer GBIF validation for species groups
+
+    # if validated data exists
+    # display a preview for the validated data (can be found in sequence metadata)
 
 
 main()
