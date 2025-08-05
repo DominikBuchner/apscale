@@ -1,4 +1,4 @@
-import duckdb, pyproj
+import duckdb, pyproj, time, requests
 import pandas as pd
 import pathlib
 from joblib import Parallel, delayed
@@ -8,6 +8,7 @@ from shapely.geometry import MultiPoint
 from shapely.ops import transform
 from shapely.geometry.polygon import orient
 from shapely import wkt
+from pygbif import occurrences as occ
 
 
 def check_metadata(read_data_to_modify):
@@ -81,8 +82,7 @@ def compute_wkt_string(read_data_to_modify, sequence_idx, radius, lat_col, lon_c
     ).df()
 
     # extract the coordinates
-    coords = list(zip(data[lat_col], data[lon_col]))
-
+    coords = list(zip(data[lon_col], data[lat_col]))
     # compute the multiploint
     mp = MultiPoint(coords)
     hull = mp.convex_hull
@@ -241,8 +241,8 @@ def select_map_data(temp_db, sequence_idx) -> pd.DataFrame:
     occurence_data = temp_db_con.execute(
         f"""
         SELECT 
-            lat, 
-            lon
+            lon, 
+            lat
         FROM distribution_data AS dd
         WHERE dd.sequence_idx = {sequence_idx}
         """
@@ -251,12 +251,190 @@ def select_map_data(temp_db, sequence_idx) -> pd.DataFrame:
     occurence_data["label"] = "occurence"
 
     # extrakt the wkt from the wkt data
-    wkt = temp_db_con.execute(
-        f"""
+    wkt_string = (
+        temp_db_con.execute(
+            f"""
         SELECT * FROM wkt_data
         WHERE sequence_idx = {sequence_idx}
         """
-    ).df()[""]
+        )
+        .df()["wkt_string"]
+        .item()
+    )
+
+    wkt_data = list(wkt.loads(wkt_string).exterior.coords)
+
+    wkt_data = pd.DataFrame(data=wkt_data, columns=["lon", "lat"])
+    wkt_data["label"] = "distribution"
+
+    # concat both frames to get the map data
+    map_data = pd.concat([occurence_data, wkt_data], ignore_index=True)
+    # add a color column
+    color_dict = {"occurence": "#800000", "distribution": "#008000"}
+    map_data["color"] = map_data["label"].map(color_dict)
+
+    return map_data
+
+
+def validation_api_request(species_name, wkt_string) -> str:
+    # perform the api call
+    while True:
+        try:
+            validation_result = occ.search(
+                scientificName=species_name, geometry=wkt_string, timeout=60
+            )
+            break
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                time.sleep(1)
+                continue
+
+    if validation_result["count"] > 0:
+        return "plausible"
+    else:
+        return "implausible"
+
+
+def api_validation(temp_db, temp_folder):
+    # establish the connection
+    temp_db_con = duckdb.connect(temp_db)
+
+    # collect the required data
+    api_data = temp_db_con.execute(
+        f"""
+        SELECT 
+            DISTINCT(wd.sequence_idx),
+            dd.gbif_taxonomy,
+            wd.wkt_string
+        FROM wkt_data AS wd
+        LEFT JOIN distribution_data AS dd
+            ON wd.sequence_idx = dd.sequence_idx
+        """
+    )
+
+    chunk_count = 1
+
+    while True:
+        api_data_chunk = api_data.fetch_df_chunk()
+        if api_data_chunk.empty:
+            break
+        else:
+            # create a filename for the chunk
+            output_name = temp_folder.joinpath(
+                f"gbif_validation_{chunk_count}.parquet.snappy"
+            )
+            chunk_args = zip(
+                api_data_chunk["gbif_taxonomy"], api_data_chunk["wkt_string"]
+            )
+            validation_status = Parallel(n_jobs=-2)(
+                delayed(validation_api_request)(species_name, wkt_string)
+                for species_name, wkt_string in chunk_args
+            )
+            # some user output
+            st.toast(f"Chunk {chunk_count} processed!")
+
+            # save to parquet
+            chunk_output = pd.DataFrame(
+                zip(api_data_chunk["sequence_idx"], validation_status),
+                columns=["sequence_idx", "gbif_validation"],
+            )
+
+            # write to parquet to later ingest into the main database
+            chunk_output.to_parquet(output_name)
+
+            # increase the chunk count
+            chunk_count += 1
+
+    temp_db_con.close()
+
+
+def add_validation_to_metadata(read_data_to_modify, temp_folder):
+    # connect to the main database
+    read_data_to_modify_con = duckdb.connect(read_data_to_modify)
+    # collect the parquet data
+    parquet_files = temp_folder.joinpath("gbif_validation_*.parquet.snappy")
+
+    # create a view over the parquet files
+    read_data_to_modify_con.execute(
+        f"""
+        CREATE OR REPLACE VIEW validation_parquet AS
+        SELECT * 
+        FROM read_parquet('{parquet_files}')
+        """
+    )
+
+    # check if sequence gbif validation is in the database
+    info = read_data_to_modify_con.execute("PRAGMA table_info(sequence_metadata)").df()
+    info = info["name"].to_list()
+
+    if "gbif_validation" not in info:
+        read_data_to_modify_con.execute(
+            "ALTER TABLE sequence_metadata ADD COLUMN gbif_validation TEXT"
+        )
+
+    # add the validation to the sequence metadata
+    read_data_to_modify_con.execute(
+        f"""
+        UPDATE sequence_metadata AS smd
+        SET gbif_validation = vp.gbif_validation
+        FROM validation_parquet AS vp
+        WHERE smd.sequence_idx = vp.sequence_idx
+        """
+    )
+
+    # remove the parquet files
+    for file in temp_folder.glob("gbif_validation_*.parquet.snappy"):
+        if file.is_file():
+            file.unlink()
+
+
+def gbif_validation_performed(read_data_to_modify: str) -> bool:
+    # connect to database
+    read_data_to_modify_con = duckdb.connect(read_data_to_modify)
+
+    # get the table info
+    info = read_data_to_modify_con.execute("PRAGMA table_info(sequence_metadata)").df()
+    info = info["name"].to_list()
+
+    read_data_to_modify_con.close()
+
+    if "gbif_validation" in info:
+        return True
+    else:
+        return False
+
+
+def validation_preview(read_data_to_modify: str, n_rows: int) -> pd.DataFrame:
+    # establish the connection
+    read_data_to_modify_con = duckdb.connect(read_data_to_modify, read_only=True)
+
+    # get the first n rows
+    preview = read_data_to_modify_con.execute(
+        f"""
+        SELECT 
+            sequence_idx,
+            gbif_taxonomy,
+            gbif_validation
+        FROM sequence_metadata
+        WHERE gbif_taxonomy IS NOT NULL
+        LIMIT {n_rows}
+        """
+    ).df()
+
+    read_data_to_modify_con.close()
+
+    return preview
+
+
+def reset_validation(read_data_to_modify: str) -> None:
+    # establish the connection
+    read_data_to_modify_con = duckdb.connect(read_data_to_modify)
+
+    read_data_to_modify_con.execute(
+        "ALTER TABLE sequence_metadata DROP COLUMN gbif_validation"
+    )
+
+    read_data_to_modify_con.close()
 
 
 def main():
@@ -295,8 +473,17 @@ def main():
     # check if wkt is calculated
     wkt_computed = wkt_calculated(temp_db)
 
+    # check if the GBIF validation has been performed
+    gbif_validated = gbif_validation_performed(st.session_state["read_data_to_modify"])
+
     # if all are true display a selector for lat lon
-    if sequence_metadata and sample_metadata and gbif_taxonomy and not wkt_computed:
+    if (
+        sequence_metadata
+        and sample_metadata
+        and gbif_taxonomy
+        and not wkt_computed
+        and not gbif_validated
+    ):
         sample_meta_cols = collect_sample_metadata_cols(
             st.session_state["read_data_to_modify"]
         )
@@ -345,7 +532,7 @@ def main():
                 st.rerun()
 
     # if the wkt strings are already computed, display the map
-    if wkt_computed:
+    if wkt_computed and not gbif_validated:
         st.write("Species distribution data detected!")
 
         # generate a preview
@@ -359,13 +546,51 @@ def main():
 
         if idx_to_plt:
             map_data = select_map_data(temp_db, idx_to_plt)
+
+            if not map_data.empty:
+                st.map(map_data, latitude="lat", longitude="lon", color="color")
+
         # option to reset the species distribution data
+        compute = st.button(label="Validate species via GBIF API", type="primary")
+        reset = st.button(label="Reset species distributions", type="secondary")
+
+        # reset wkt data
+        if reset:
+            temp_db.unlink()
+            st.rerun()
 
         # perform the GBIF validation algorithm
+        if compute:
+            with st.spinner("Querying GBIF API. Hold on.", show_time=True):
+                api_validation(temp_db, temp_folder)
 
-        # infer GBIF validation for species groups
+            # ingest the data into the sequence metadata
+            add_validation_to_metadata(
+                st.session_state["read_data_to_modify"], temp_folder
+            )
+            # remove temp db and tempfolder
+            temp_db.unlink()
+            temp_folder.rmdir()
+            st.rerun()
 
     # if validated data exists
+    if gbif_validated:
+        st.write("GBIF validation has already been performed.")
+        # display preview rows
+        preview_rows = st.number_input("Rows to display in preview", min_value=5)
+        # display the preview
+        st.write(
+            validation_preview(
+                st.session_state["read_data_to_modify"], n_rows=preview_rows
+            )
+        )
+
+        reset_vali = st.button("Reset GBIF validation", type="primary")
+
+        if reset_vali:
+            reset_validation(st.session_state["read_data_to_modify"])
+            st.rerun()
+
     # display a preview for the validated data (can be found in sequence metadata)
 
 

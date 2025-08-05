@@ -92,7 +92,7 @@ def get_metadata_info(read_data_to_modify: str) -> tuple:
         # check if one of the gbif validation modules has been run already
         if "gbif_taxonomy" in sequence_metadata.columns:
             perf_gbif_taxonomy = "performed"
-        if "gbif_validation_species" in sequence_metadata.columns:
+        if "gbif_validation" in sequence_metadata.columns:
             perf_gbif_validation = "performed"
     except duckdb.CatalogException:
         pass
