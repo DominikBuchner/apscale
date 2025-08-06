@@ -217,7 +217,7 @@ def generate_map_preview_table(temp_db) -> pd.DataFrame:
     # create a view with thejoined tables
     temp_db_con.execute(
         f"""
-        CREATE OR REPLACE VIEW preview_table AS 
+        CREATE OR REPLACE TEMPORARY VIEW preview_table AS 
         SELECT 
             DISTINCT(wkt.sequence_idx),
             dd.gbif_taxonomy,
@@ -357,7 +357,7 @@ def add_validation_to_metadata(read_data_to_modify, temp_folder):
     # create a view over the parquet files
     read_data_to_modify_con.execute(
         f"""
-        CREATE OR REPLACE VIEW validation_parquet AS
+        CREATE OR REPLACE TEMPORARY VIEW validation_parquet AS
         SELECT * 
         FROM read_parquet('{parquet_files}')
         """

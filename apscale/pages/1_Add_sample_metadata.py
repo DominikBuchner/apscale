@@ -100,7 +100,7 @@ def display_column_datatypes(metadata_parquet: str):
     # read the first row of the parquet via duckdb to collect the datatypes and names
     memory = duckdb.connect(":memory:")
     memory.execute(
-        f"CREATE VIEW temp_view AS SELECT * FROM read_parquet('{metadata_parquet}')"
+        f"CREATE TEMPORARY VIEW temp_view AS SELECT * FROM read_parquet('{metadata_parquet}')"
     )
     info = memory.execute("PRAGMA table_info('temp_view')").fetchdf()
     info = info.loc[~info["name"].str.startswith("__")]
@@ -191,7 +191,7 @@ def save_to_read_store(
 
     read_data_store.execute(
         f"""
-    CREATE OR REPLACE VIEW parquet_data AS
+    CREATE OR REPLACE TEMPORARY VIEW parquet_data AS
     SELECT {select_clause}
     FROM read_parquet('{metadata_parquet}')
     """

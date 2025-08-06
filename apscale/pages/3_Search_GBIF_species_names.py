@@ -129,7 +129,7 @@ def query_gbif(read_data_to_modify: str, species_column: str):
     # create a new view across the parquet files
     read_data_to_modify.execute(
         f"""
-        CREATE OR REPLACE VIEW gbif_tax_parquet AS
+        CREATE OR REPLACE TEMPORARY VIEW gbif_tax_parquet AS
         SELECT * 
         FROM read_parquet('{parquet_files}')
         """
