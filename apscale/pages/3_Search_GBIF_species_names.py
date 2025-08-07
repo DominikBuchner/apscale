@@ -1,113 +1,289 @@
 import streamlit as st
+import duckdb
 import pandas as pd
 from pygbif import species
-import numpy as np
+from joblib import Parallel, delayed
 
 
-def seq_metadata_available(read_data_to_modify: str) -> bool:
-    """Function to quickly check if the sequence metadata is available.
+def sequence_metadata_available(read_data_to_modify: str) -> bool:
+    """Function to check if sequence metadata is available
+
+    Args:
+        read_data_to_modify (str): Read data store to work with
 
     Returns:
         bool: True if available, else False
     """
-    with pd.HDFStore(read_data_to_modify) as store:
-        if "/sequence_metadata" in store.keys():
-            return store.get_storer("sequence_metadata").table.colnames
-        else:
-            return []
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+
+    # look for the sample metadata tabke
+    try:
+        info = read_data_to_modify.execute(
+            "PRAGMA table_info('sequence_metadata')"
+        ).df()
+        info = info.loc[info["type"] == "VARCHAR"]
+        string_columns = info["name"].to_list()
+        read_data_to_modify.close()
+        return string_columns
+    except duckdb.CatalogException:
+        read_data_to_modify.close()
+        return []
 
 
-def file_preview(read_data_to_modify: str, species_col: str) -> object:
-    """Function to generate a filtered df
+def generate_file_preview(
+    read_data_to_modify: str, species_column: str
+) -> pd.DataFrame:
+    # create the duckdb connection
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    # select all columns that are not null
+    preview_table = read_data_to_modify.execute(
+        f"""
+        SELECT 
+            DISTINCT smd.{species_column}
+        FROM sequence_metadata as smd
+        WHERE 
+            smd."{species_column}" IS NOT NULL
+            AND smd.hash != 'dummy_hash'
+        ORDER BY smd.{species_column}
+        LIMIT 50
+        """
+    ).df()
 
-    Args:
-        read_data_to_modify (str): Path to the sequence metadata
+    species_count = read_data_to_modify.execute(
+        f"""
+        SELECT 
+            COUNT(DISTINCT smd.{species_column})
+        FROM sequence_metadata as smd
+        WHERE 
+            smd."{species_column}" IS NOT NULL
+            AND smd.hash != 'dummy_hash'
+        """
+    ).fetchone()[0]
 
-    Returns:
-        object: Dataframe with the selected column
-    """
-    sequence_metadata = pd.read_hdf(
-        read_data_to_modify, key="sequence_metadata", columns=[species_col]
+    st.write(f"There are **{species_count} distinct values** in the selected column.")
+
+    return preview_table
+
+
+def api_request(species_name: str) -> str:
+    api_response = species.name_backbone(species_name, timeout=60)
+
+    # try to fetch the new name, else return a NULL value
+    try:
+        species_name = api_response["species"]
+    except KeyError:
+        species_name = pd.NA
+
+    return species_name
+
+
+def query_gbif(read_data_to_modify: str, species_column: str):
+    # create a temp path to save intermediate results
+    temp_folder = read_data_to_modify.parent.parent.joinpath("temp")
+    temp_folder.mkdir(exist_ok=True)
+
+    # connect to database
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+
+    preview_table = read_data_to_modify.execute(
+        f"""
+        SELECT 
+            DISTINCT smd.{species_column}
+        FROM sequence_metadata as smd
+        WHERE 
+            smd."{species_column}" IS NOT NULL
+            AND smd.hash != 'dummy_hash'
+        """
     )
 
-    return sequence_metadata
+    chunk_count = 1
 
+    # loop over the data in chunks, unknown how large this may grow
+    while True:
+        # fetch a chunk
+        chunk = read_data_to_modify.fetch_df_chunk(100)
+        if chunk.empty:
+            break
+        else:
+            # create a filename for the chunk
+            output_name = temp_folder.joinpath(
+                f"gbif_chunk_{chunk_count}.parquet.snappy"
+            )
+            # execute the API here and save the result to parquet
+            species_names = chunk[species_column].to_list()
+            corrected_names = Parallel(n_jobs=-2)(
+                delayed(api_request)(name) for name in species_names
+            )
+            # create an output dataframe
+            chunk_df = pd.DataFrame(
+                data=zip(species_names, corrected_names),
+                columns=[species_column, "gbif_taxonomy"],
+            )
+            # save to intermediate parquet untill all chunks are finished
+            chunk_df.to_parquet(output_name)
+            chunk_count += 1
 
-def query_gbif(species_name: str) -> str:
-    """Function to query the GBIF species backbone to correct names against it.
+    # process parquet files and include them into the database
+    parquet_files = temp_folder.joinpath("gbif_chunk_*.parquet.snappy")
 
-    Args:
-        species_name (str): Species name as a string.
+    # create a new view across the parquet files
+    read_data_to_modify.execute(
+        f"""
+        CREATE OR REPLACE TEMPORARY VIEW gbif_tax_parquet AS
+        SELECT * 
+        FROM read_parquet('{parquet_files}')
+        """
+    )
 
-    Returns:
-        str: Species name from GBIF backbone
-    """
-    api_resp = species.name_backbone(species_name, timeout=60)
-
-    # try to fetch the new name if there is any, else return an empty string
+    # drop a potential existing column
     try:
-        new_name = api_resp["species"]
-    except KeyError:
-        new_name = np.nan
+        read_data_to_modify.execute(
+            "ALTER TABLE sequence_metadata DROP COLUMN gbif_taxonomy"
+        )
+        # add a fresh column
+        read_data_to_modify.execute(
+            "ALTER TABLE sequence_metadata ADD COLUMN gbif_taxonomy TEXT"
+        )
+    except duckdb.BinderException:
+        # add a fresh column
+        read_data_to_modify.execute(
+            "ALTER TABLE sequence_metadata ADD COLUMN gbif_taxonomy TEXT"
+        )
 
-    return new_name
+    # add to the sequence metadata
+    read_data_to_modify.execute(
+        f"""
+    UPDATE sequence_metadata AS smd
+    SET gbif_taxonomy = gtp.gbif_taxonomy
+    FROM gbif_tax_parquet AS gtp
+    WHERE smd."{species_column}" = gtp."{species_column}"
+    """
+    )
+
+    # also add to the group metadata
+    # drop a potential existing column
+    try:
+        read_data_to_modify.execute(
+            "ALTER TABLE group_metadata DROP COLUMN gbif_taxonomy"
+        )
+        # add a fresh column
+        read_data_to_modify.execute(
+            "ALTER TABLE group_metadata ADD COLUMN gbif_taxonomy TEXT"
+        )
+    except duckdb.BinderException:
+        # add a fresh column
+        read_data_to_modify.execute(
+            "ALTER TABLE group_metadata ADD COLUMN gbif_taxonomy TEXT"
+        )
+
+    # add to the sequence metadata
+    read_data_to_modify.execute(
+        f"""
+    UPDATE group_metadata AS gmd
+    SET gbif_taxonomy = gtp.gbif_taxonomy
+    FROM gbif_tax_parquet AS gtp
+    WHERE gmd."{species_column}" = gtp."{species_column}"
+    """
+    )
+
+    # close the read store
+    read_data_to_modify.close()
+
+    # remove parquet files and temp folder
+    for file in temp_folder.glob("gbif_chunk_*"):
+        if file.is_file():
+            file.unlink()
+
+    temp_folder.rmdir()
+
+
+def check_gbif_taxonomy(read_data_to_modify):
+    # connect to database
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    try:
+        info = read_data_to_modify.execute("PRAGMA table_info(sequence_metadata)").df()
+    except duckdb.CatalogException:
+        return False
+    read_data_to_modify.close()
+
+    if "gbif_taxonomy" in info["name"].to_list():
+        return True
+    else:
+        return False
+
+
+def display_gbif_taxonomy(read_data_to_modify, n_rows):
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    preview = read_data_to_modify.execute(
+        f"""SELECT * FROM sequence_metadata
+        WHERE hash != 'dummy_hash' AND gbif_taxonomy IS NOT NULL
+        LIMIT {n_rows}"""
+    ).df()
+    read_data_to_modify.close()
+
+    return preview
+
+
+def reset_gbif_taxonomy(read_data_to_modify):
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    read_data_to_modify.execute(
+        "ALTER TABLE sequence_metadata DROP COLUMN gbif_taxonomy"
+    )
+    read_data_to_modify.close()
 
 
 def main():
-    # header
     st.title("Query the GBIF backbone to harmonize species names")
 
-    # check if sequene metadata is available
-    col_names = seq_metadata_available(st.session_state["read_data_to_modify"])
-    # remove index from col names
-    col_names = [name for name in col_names if name != "index"]
+    # check if sequence metadata is available
+    seq_data_col_names = sequence_metadata_available(
+        st.session_state["read_data_to_modify"]
+    )
 
-    if col_names:
+    gbif_taxonomy_available = check_gbif_taxonomy(
+        st.session_state["read_data_to_modify"]
+    )
+
+    if gbif_taxonomy_available:
+        # display data, option to reset
+        st.write("GBIF taxonomy has already been added.")
+        preview_rows = st.number_input("Rows to display in preview", min_value=5)
+        st.write(
+            display_gbif_taxonomy(
+                st.session_state["read_data_to_modify"], n_rows=preview_rows
+            )
+        )
+        reset_tax = st.button("Reset GBIF taxonomy", type="primary")
+
+        if reset_tax:
+            reset_gbif_taxonomy(st.session_state["read_data_to_modify"])
+            st.rerun()
+
+    # if a proper column is selected create the dropdown and preview
+    if not gbif_taxonomy_available and seq_data_col_names:
         st.write("Please select the column that holds the species names.")
-        species_column = st.selectbox("Species column label", options=col_names)
+        species_column = st.selectbox("Species column name", options=seq_data_col_names)
+
         if species_column:
             # generate a file preview
-            preview = file_preview(
+            preview = generate_file_preview(
                 st.session_state["read_data_to_modify"], species_column
             )
+
             st.header("File preview")
-            st.write(preview.iloc[1:, :].head(50))
-            # get some basic stats
-            st.write(
-                f"The selected column contains **{preview[species_column].nunique()}** unique values."
-            )
+            st.write(preview)
+
             start_query = st.button("Query GBIF API", type="primary")
+
             if start_query:
-                # extract a list of values for to query the API for [name1, name2, name3]
-                species_names = preview[species_column].dropna().unique()
+                # launch the API query
+                with st.spinner("Querying GBIF API. Hold on.", show_time=True):
+                    query_gbif(st.session_state["read_data_to_modify"], species_column)
 
-                # loop over the list, display progress, return dict with new names
-                pbar = st.progress(0, text="Looking up GBIF names.")
+                st.rerun()
 
-                # gather results here
-                results = {}
-                for i, name in enumerate(species_names):
-                    results[name] = query_gbif(name)
-                    progress = int((i + 1) / len(species_names) * 100)
-                    pbar.progress(progress, text=f"Processing {name}")
-
-                # map the name to the original dataframe and save it under new key
-                output = preview[[species_column]].copy()
-                output["gbif_taxonomy"] = output[species_column].map(results)
-                output = output.drop(columns=species_column)
-
-                # save to read storage under a new key
-                output.to_hdf(
-                    st.session_state["read_data_to_modify"],
-                    key="gbif_taxonomy",
-                    mode="a",
-                    format="table",
-                )
-
-                # give user output
-                st.success("GBIF taxonomy successfully saved to read storage.")
-    else:
-        st.write("**Please add sequence metadata first.**")
+    if not gbif_taxonomy_available and not seq_data_col_names:
+        st.write("**Please add proper sequence metadata first.**")
 
 
 main()

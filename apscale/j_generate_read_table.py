@@ -1,757 +1,766 @@
-import glob, gzip, pickle, shutil, datetime, os, math, subprocess, duckdb
-import dask.dataframe as dd
-import pyarrow as pa
-from zict import File, Buffer, LRU, Func
-from pathlib import Path
-from Bio.SeqIO.FastaIO import SimpleFastaParser
-from Bio import Align
+import glob, os, datetime, gzip, duckdb, hashlib, more_itertools, sys, subprocess
 import pandas as pd
-from apscale.a_create_project import choose_input
-from more_itertools import chunked
 from joblib import Parallel, delayed
 from tqdm import tqdm
+from pathlib import Path
+from apscale.a_create_project import choose_input
+from Bio.SeqIO.FastaIO import SimpleFastaParser
 
 
-def parse_fasta_data(input_path: str):
-    """Generator function that takes an input path to a size annotated fasta file
-    and yield the samples name, sequence hash, sequence and the sequence count.
-    Data is yielded sequences wise
+def fasta_to_parquet(fasta_path: str, output_folder: str, perform_hash: bool) -> None:
+    """Function to stream fasta to parquet as tables in the form of
+    [header, sequence, count]
 
     Args:
-        input_path (str): Input path to the fasta file.
-
-    Yields:
-        tuple: Yields a tuple with the sample name, sequence has, sequence and the sequence count.
+        fasta_path (str): Path to the fasta file to transform.
+        output_folder (str): Output folder to write to
+        perform_hash (bool): Wether to hash the sequences prior to parquet generation. Needed if no data aggregation step is used!
     """
-    # extract the sample name
-    sample_name = Path(input_path).with_suffix("").with_suffix("").name
+    # extract the sample name from the fasta_path
+    fasta_name = Path(fasta_path).with_suffix("").stem
 
-    # always yield one empty dummy sequence as first object so empty files are not missing from the read table
-    yield sample_name, "empty_seq", "empty_seq", 0
+    # read the fasta with the simple fasta parser to generate rows
+    all_rows = []
 
-    # extract the data directly from the fasta itself
-    with gzip.open(input_path, "rt") as data_stream:
+    # add a dummy seq to each file to handle empty files greacefully
+    all_rows.append([fasta_name, "dummy_hash", "dummy_seq", 0])
+
+    with gzip.open(fasta_path, "rt") as data_stream:
         for header, seq in SimpleFastaParser(data_stream):
             header_data = header.split(";size=")
             seq_hash, seq_count = header_data[0], int(header_data[1].rstrip(";"))
+
+            # only compute hash if needed
+            if perform_hash:
+                seq_hash = seq.encode("ascii")
+                seq_hash = hashlib.sha3_256(seq_hash).hexdigest()
+
             seq = seq.upper().strip()
-            yield sample_name, seq_hash, seq, seq_count
+            all_rows.append([fasta_name, seq_hash, seq, seq_count])
 
-
-def generate_buffered_dict(save_path: str, buffer_size: int) -> dict:
-    """Function to generate a disk backed dict that can (infinetly) grow.
-
-    Args:
-        save_path (str): Path to save the dict to.
-        buffer_size (int): How many values to keep in memory before pushing to disk.
-
-    Returns:
-        dict: Dict that is backed up if needed
-    """
-    # define cold and hot storage
-    cold = Func(pickle.dumps, pickle.loads, File(Path(save_path)))
-    hot = LRU(n=buffer_size, d={})
-    buffered_dict = Buffer(hot, cold, n=int(buffer_size * 0.99))
-
-    return buffered_dict
-
-
-def save_data_lines_to_hdf(save_path: str, data_lines: dict) -> dict:
-    """Function to append data lines to the hdf store
-
-    Args:
-        save_path (str): Savepath of the output hdf file.
-        data_lines (dict): Dict that's holding the data lines
-
-    Returns: Returns an empty dict to free memory space
-    """
-    # convert the data liens dict to dataframe
-    data_lines = pd.DataFrame.from_dict(
-        data_lines, orient="index", columns=["hash_idx", "sample_idx", "read_count"]
+    # put into pandas dataframe
+    fasta_data = pd.DataFrame(
+        data=all_rows, columns=["sample", "hash", "sequence", "read_count"]
     )
 
-    # write the data to hdf format
-    with pd.HDFStore(
-        save_path, mode="a", complib="blosc:blosclz", complevel=9
-    ) as hdf_output:
-        hdf_output.append(
-            key="read_count_data", value=data_lines, format="table", data_columns=True
-        )
-
-    return {}
-
-
-def add_dicts_to_hdf(
-    save_path: str,
-    seq_hash_to_idx: dict,
-    seq_hash_to_seq: dict,
-    sample_to_idx: dict,
-    buffer_size: int,
-) -> None:
-    """Function to add the idx dictionarys to the hdf store.
-
-    Args:
-        save_path (str): Path to save the hdf to.
-        seq_hash_to_idx (dict): Dict that maps hash values to idx values
-        seq_hash_to_seq (dict): Dict that maps hash values to sequences
-        sample_to_idx (dict): Dict that maps sample names to idx values
-        buffer_size (int): Buffer size to use to loop over the dictionarys when writing to hdf
-    """
-    # loop over the chunks of seq hash to idx to push to hdf
-    # write the chunk to the hdf store
-    with pd.HDFStore(
-        save_path, mode="a", complib="blosc:blosclz", complevel=9
-    ) as hdf_output:
-        for chunk in chunked(seq_hash_to_idx.items(), buffer_size):
-            chunk_df = pd.DataFrame(data=chunk, columns=["hash", "hash_idx"]).set_index(
-                "hash_idx"
-            )
-            chunk_df["seq"] = chunk_df["hash"].map(seq_hash_to_seq)
-            hdf_output.append(
-                key="sequence_data",
-                value=chunk_df,
-                format="table",
-                data_columns=True,
-            )
-
-    # write the chunk to the hdf store
-    with pd.HDFStore(
-        save_path, mode="a", complib="blosc:blosclz", complevel=9
-    ) as hdf_output:
-        for chunk in chunked(sample_to_idx.items(), buffer_size):
-            chunk_df = pd.DataFrame(
-                data=chunk, columns=["sample_name", "sample_idx"]
-            ).set_index("sample_idx")
-            hdf_output.append(
-                key="sample_data",
-                value=chunk_df,
-                format="table",
-                data_columns=True,
-            )
-
-
-def index_data_to_hdf(project: str, input_files: str, buffer_size: int) -> str:
-    """Function to index the dataset with buffered dicts and saving all data as dataframes to hdf.
-
-    Args:
-        project (str): Apscale project to work in.
-        input_files (str): List of all input files to process
-        buffer_size (int): How many values to keep in memory before flowing data to disk.
-
-    Returns:
-        str: Savepath of the hdf storage for easier access later on.
-    """
-    # generate savepaths for the buffered dicts first
-    savepath_seq_hash_to_idx = Path(project).joinpath(
-        "11_read_table", "temp", "seq_hash_to_idx"
-    )
-    savepath_seq_hash_to_seq = Path(project).joinpath(
-        "11_read_table", "temp", "seq_hash_to_seq"
-    )
-    savepath_sample_to_idx = Path(project).joinpath(
-        "11_read_table", "temp", "sample_to_idx"
-    )
-
-    # generate the buffered dicts
-    seq_hash_to_idx = generate_buffered_dict(savepath_seq_hash_to_idx, buffer_size)
-    seq_hash_to_seq = generate_buffered_dict(savepath_seq_hash_to_seq, buffer_size)
-    sample_to_idx = generate_buffered_dict(savepath_sample_to_idx, buffer_size)
-
-    # define all indeces prior to looping over the files
-    hash_idx = 0
-    sample_idx = 0
-    data_idx = 0
-
-    # spill over to hdf if too full, no lookups needed
-    full_data = {}
-
-    # define the hdf savepath, remove data from previous run to not append to it
-    hdf_savename = Path(project).joinpath(
-        "11_read_table",
-        "data",
-        "read_data_storage_{}.h5.lz".format(Path(project).stem.replace("_apscale", "")),
-    )
-
-    try:
-        os.remove(hdf_savename)
-    except FileNotFoundError:
-        pass
-
-    # loop over all input files
-    for file in input_files:
-        # loop over the data in the files line by line
-        for sample_name, hash, seq, read_count in parse_fasta_data(file):
-            # new hashes and samples only have to be added once a new one is found
-            if hash not in seq_hash_to_idx:
-                seq_hash_to_idx[hash] = hash_idx
-                seq_hash_to_seq[hash] = seq
-                # increase the hash idx
-                hash_idx += 1
-            if sample_name not in sample_to_idx:
-                sample_to_idx[sample_name] = sample_idx
-                sample_idx += 1
-            # data has to be added at each iteration
-            full_data[data_idx] = (
-                seq_hash_to_idx[hash],
-                sample_to_idx[sample_name],
-                read_count,
-            )
-            data_idx += 1
-            # as soon as buffer size data rows are collected, stream data to hdf
-            if data_idx % buffer_size == 0:
-                # add data to the hdf store
-                save_data_lines_to_hdf(hdf_savename, full_data)
-                full_data = {}
-    else:
-        save_data_lines_to_hdf(hdf_savename, full_data)
-
-    # add the buffered dicts to hdf
-    add_dicts_to_hdf(
-        hdf_savename, seq_hash_to_idx, seq_hash_to_seq, sample_to_idx, buffer_size
-    )
-
-    # remove temporary savefiles
-    shutil.rmtree(Path(project).joinpath("11_read_table", "temp"))
-
-    # return to hdf savename for reuse / ordering / reading
-    return hdf_savename
-
-
-def generate_fasta(
-    project: str, hdf_savename: str, chunksize: int, data_type: str
-) -> None:
-    """Function to generate an ordered fasta file that holds all sequences of the dataset.
-
-    Args:
-        project (str): Apscale project to work in.
-        hdf_savename (str): Path to the hdf file that holds the data.
-        chunksize(int): Chunksize to use for saving memory
-        data_type(str): Wether to save sequences or sequence groups
-    """
-    if data_type == "sequences":
-        count_key = "read_count_data"
-        sequence_key = "sequence_data"
-        index_key = "0"
-    elif data_type == "sequence_groups":
-        count_key = "sequence_group_read_count_data"
-        sequence_key = "sequence_group_data"
-        index_key = "1"
-
-    read_count_data = dd.read_hdf(
-        hdf_savename,
-        key=count_key,
-        columns=["hash_idx", "read_count"],
-        chunksize=chunksize,
-    )
-
-    # groupby hash_idx to order by abundance
-    read_count_data = read_count_data.groupby(by=["hash_idx"]).sum().reset_index()
-
-    # load the sequence data to generate the fasta file
-    sequence_data = dd.read_hdf(
-        hdf_savename, key=sequence_key, chunksize=chunksize
-    ).reset_index()
-
-    # merge on hash idx
-    fasta_data = dd.merge(read_count_data, sequence_data, on="hash_idx")
-
-    # sort the values by read count
-    fasta_data = fasta_data.sort_values(by=["read_count"], ascending=False)
-
-    # store a fasta order column for later grouping operations
-    fasta_data = fasta_data.assign(fasta_order=1)
-    fasta_data["fasta_order"] = fasta_data.fasta_order.cumsum() - 1
-
-    # generate a savename for the fasta file
-    fasta_savename = Path(project).joinpath(
-        "11_read_table",
-        "{}_{}_{}.fasta".format(
-            index_key, data_type, Path(project).stem.replace("_apscale", "")
-        ),
-    )
-
-    # open the fasta file to write to
-    with open(fasta_savename, "w") as out_stream:
-        # write the fasta data
-        for part in fasta_data.to_delayed():
-            part = part.compute()
-            for hash, seq in zip(part["hash"], part["seq"]):
-                # skip the empty seq
-                if hash != "empty_seq":
-                    out_stream.write(f">{hash}\n{seq}\n")
-
-    # save the fasta data in the read store to not use a reference later in the code
-    if data_type == "sequences":
-        fasta_data.to_hdf(
-            hdf_savename, key="fasta_data_sequences", mode="a", compute=True
-        )
-    if data_type == "sequence_groups":
-        fasta_data.to_hdf(
-            hdf_savename, key="fasta_data_sequence_groups", mode="a", compute=True
-        )
-
-    return fasta_savename
-
-
-def generate_sequence_groups(
-    project: str,
-    hdf_savename: str,
-    fasta_savename: str,
-    group_threshold: float,
-    chunksize: int,
-):
-    """Function to compute sequence groups with a given threshold (similar to OTUs).
-
-    Args:
-        project (str): Apscale project to work in.
-        hdf_savename (str): Path to the data storage.
-        fasta_savename (str): Path to the fasta.
-        group_threshold (float): Threshold to group with. Float between 0 and 1.
-        chunksize (int): Chunksize to process the resulting sequence groups with.
-
-    Returns:
-        _type_: _description_
-    """
-    # generate the vsearch matchfile for pairwise comparisons
-    matchfile_path = Path(project).joinpath(
-        "11_read_table",
-        "data",
-        "matchfile_{}.csv".format(str(group_threshold).replace(".", "")),
-    )
-
-    print(
-        "{}: Computing matchfile with vsearch.".format(
-            datetime.datetime.now().strftime("%H:%M:%S")
-        )
-    )
-
-    with open(matchfile_path, "w") as output:
-        # run vsearch and pipe stdout to the file
-        subprocess.run(
-            [
-                "vsearch",
-                "--usearch_global",
-                fasta_savename,
-                "--db",
-                fasta_savename,
-                "--id",
-                str(group_threshold),
-                "--userout",
-                "-",
-                "--quiet",
-                "--userfields",
-                "query+target+id",
-                "--maxaccepts",
-                str(0),
-            ],
-            stdout=output,
-        )
-
-    # ingest the data into a dask dataframe
-    matchfile = dd.read_csv(
-        matchfile_path,
-        sep="\t",
-        names=["query", "target", "pct_id"],
-    )
-
-    # load the fasta data
-    fasta_data = dd.read_hdf(hdf_savename, key="fasta_data_sequences")
-
-    # add the hash idx and order to query
-    matchfile = (
-        dd.merge(
-            left=matchfile,
-            right=fasta_data[["hash_idx", "hash", "fasta_order"]],
-            how="left",
-            left_on="query",
-            right_on="hash",
-        )
-        .drop(columns="hash")
-        .rename(
-            columns={
-                "hash_idx": "hash_idx_query",
-                "fasta_order": "fasta_order_query",
-            }
-        )
-    )
-
-    # add the hash idx and order to target
-    matchfile = (
-        dd.merge(
-            left=matchfile,
-            right=fasta_data[["hash_idx", "hash", "fasta_order"]],
-            how="left",
-            left_on="target",
-            right_on="hash",
-        )
-        .drop(columns="hash")
-        .rename(
-            columns={
-                "hash_idx": "hash_idx_target",
-                "fasta_order": "fasta_order_target",
-            }
-        )
-    )
-
-    print(
-        "{}: Creating group lookup table.".format(
-            datetime.datetime.now().strftime("%H:%M:%S")
-        )
-    )
-
-    # stream data to duck db
-    duckdb_savename = Path(project).joinpath(
-        "11_read_table",
-        "data",
-        "group_lookup_table.duckdb",
-    )
-
-    # # remove old lookup table
-    if duckdb_savename.is_file():
-        duckdb_savename.unlink()
-
-    # connect to duckdb database
-    db_connection = duckdb.connect(duckdb_savename)
-
-    # stream the data to duck db
-    for chunk_nr, data_chunk in enumerate(matchfile.to_delayed()):
-        # compute the chunk
-        data_chunk = data_chunk.compute()
-        data_chunk = pa.Table.from_pandas(data_chunk)
-        # create the table for the first chunk
-        if chunk_nr == 0:
-            db_connection.sql("CREATE TABLE matchfile AS SELECT * FROM data_chunk")
-        else:
-            db_connection.sql("INSERT INTO matchfile SELECT * FROM data_chunk")
-
-    print(
-        "{}: Grouping sequences.".format(datetime.datetime.now().strftime("%H:%M:%S"))
-    )
-
-    first = True
-    sequence_group_data = []
-    sequence_group_savename = Path(project).joinpath(
-        "11_read_table", "data", "group_mapping.csv"
-    )
-
-    # try to remove the old sequence group mapping if it exists
-    if sequence_group_savename.is_file():
-        sequence_group_savename.unlink()
-
-    # loop over the chunks from fasta_data and sort them into groups
-    for fasta_data_chunk in fasta_data.to_delayed():
-        # compute the chunk to generate the iterator
-        fasta_data_chunk = fasta_data_chunk.compute()
-
-        # loop over the rows of the datachunk
-        for hash_idx, _, hash, seq, _ in fasta_data_chunk.itertuples(index=False):
-            # look for the matches in the matches table
-            all_hash_matches = db_connection.sql(
-                f"SELECT * FROM matchfile WHERE hash_idx_query = {hash_idx}"
-            ).to_df()
-            # if it is the first add it to the groups found table
-            if first:
-                db_connection.sql(
-                    "CREATE TABLE groups_found AS SELECT * from all_hash_matches"
-                )
-                # continue after the insertion, set first to false
-                first = False
-                sequence_group_data.append((hash_idx, hash, seq, hash_idx))
-                continue
-
-            # now the actual checking happens get all potential matches for the current hash from the groups found
-            group_assignment = db_connection.sql(
-                f"SELECT * FROM groups_found WHERE hash_idx_target = {hash_idx} ORDER BY fasta_order_query LIMIT 1"
-            ).to_df()
-            if group_assignment.empty:
-                db_connection.sql(
-                    "INSERT INTO groups_found SELECT * FROM all_hash_matches"
-                )
-                sequence_group_data.append((hash_idx, hash, seq, hash_idx))
-            else:
-                # extract the value from the group assignment
-                sequence_group_data.append(
-                    (
-                        hash_idx,
-                        hash,
-                        seq,
-                        group_assignment["hash_idx_query"].item(),
-                    )
-                )
-        # flush to csv every 10k sequences
-        if len(sequence_group_data) >= chunksize:
-            # create a dataframe from sequence group data
-            sequence_group_data = pd.DataFrame(
-                sequence_group_data,
-                columns=[
-                    "hash_idx",
-                    "hash",
-                    "seq",
-                    "group_idx",
-                ],
-            )
-            sequence_group_data.to_csv(
-                sequence_group_savename, sep="\t", index=False, mode="a", header=False
-            )
-            sequence_group_data = []
-    # at the end of the loop flush the sequence group data
-    else:
-        # create a dataframe from sequence group data
-        sequence_group_data = pd.DataFrame(
-            sequence_group_data,
-            columns=["hash_idx", "hash", "seq", "group_idx"],
-        )
-        sequence_group_data.to_csv(
-            sequence_group_savename, sep="\t", index=False, mode="a", header=False
-        )
-
-    # finally close the db connection
-    db_connection.close()
-
-    # return sequence group savename to continue
-    return sequence_group_savename
-
-
-def generate_read_table(
-    project: str,
-    hdf_savename: str,
-    to_excel: bool,
-    to_parquet: bool,
-    data_type: str,
-) -> None:
-    """Function to generate and save read tables to excel and or parquet
-
-    Args:
-        project (str): Apscale project to work in.
-        hdf_savename (str): Path to the hdf storage that holds all data.
-        to_excel (bool): Wether or not to write to excel.
-        to_parquet (bool): Wether or not to write to parquet.
-        data_type (str): Wether to process sequences or sequence groups
-    """
-    if data_type == "sequences":
-        count_key = "read_count_data"
-        sequence_key = "sequence_data"
-        index_key = "0"
-    elif data_type == "sequence_groups":
-        count_key = "sequence_group_read_count_data"
-        sequence_key = "sequence_group_data"
-        index_key = "1"
-
-    formats = ["excel", "parquet"]
-
-    # collect number of sequences and number of samples
-    with pd.HDFStore(hdf_savename, mode="r") as store:
-        number_of_sequences = store.get_storer(sequence_key).nrows
-        number_of_samples = store.get_storer("sample_data").nrows
-
-    # give user output, ignore the empty seq
-    print(
-        "{}: Dataset contains {} unique {} and {} samples.".format(
-            datetime.datetime.now().strftime("%H:%M:%S"),
-            number_of_sequences - 1,
-            data_type.replace("_", " "),
-            number_of_samples,
-        )
-    )
-
-    # loop over both possibilities
-    for format, setting in zip(formats, (to_excel, to_parquet)):
-        # nothing to do if the setting is set to false
-        if setting == False:
-            continue
-        else:
-            # compute the batch size for the respective format
-            if format == "excel":
-                chunksize = 10_000_000 // number_of_sequences
-            if format == "parquet":
-                chunksize = 100_000_000 // number_of_sequences
-
-        # read the fasta data
-        if data_type == "sequences":
-            fasta_data = dd.read_hdf(hdf_savename, key="fasta_data_sequences")
-        if data_type == "sequence_groups":
-            fasta_data = dd.read_hdf(hdf_savename, key="fasta_data_sequence_groups")
-
-        # collect all hashes and sequences
-        all_sequence_data = fasta_data.compute()[["hash_idx", "hash", "seq"]]
-
-        ## collect the sample data in chunks
-        sample_data = dd.read_hdf(
-            hdf_savename, key="sample_data", chunksize=chunksize
-        ).reset_index()
-
-        read_count_data = dd.read_hdf(hdf_savename, key=count_key)
-
-        # load the data in chunks
-        for part_nr, part in enumerate(sample_data.to_delayed()):
-            # load the part to dask dataframe and compute it
-            part_df = dd.from_delayed(part).compute()
-
-            # create a cross product with current samples and all sequences
-            sample_sequence_matrix = pd.merge(
-                part_df[["sample_idx", "sample_name"]], all_sequence_data, how="cross"
-            )
-
-            # fetch the read counts for the current part
-            read_counts_part = read_count_data[
-                read_count_data["sample_idx"].isin(part_df["sample_idx"])
-            ].compute()
-
-            # merge the read counts into the sample sequence matrix
-            sample_sequence_matrix = sample_sequence_matrix.merge(
-                read_counts_part, on=["sample_idx", "hash_idx"], how="left"
-            )
-
-            # fill the missing values with 0
-            sample_sequence_matrix["read_count"] = sample_sequence_matrix[
-                "read_count"
-            ].fillna(0)
-
-            # pivot the table to create a classic samples x sequences table
-            wide_read_table = sample_sequence_matrix.pivot_table(
-                index=["hash_idx", "hash", "seq"],
-                columns="sample_name",
-                values="read_count",
-                fill_value=0,
-            )
-
-            # flatten column index, reset index for saving
-            wide_read_table.columns.name = None
-            wide_read_table = wide_read_table.reset_index()
-
-            # sort the dataframe by the order in fasta data
-            fasta_order = all_sequence_data[["hash_idx"]].reset_index(drop=True)
-            fasta_order["order"] = range(len(fasta_order))
-
-            # merge to the wide read_table for ordering
-            wide_read_table = wide_read_table.merge(
-                fasta_order, on="hash_idx", how="left"
-            )
-
-            # sort and drop the sorting column
-            wide_read_table = wide_read_table.sort_values("order").drop(
-                columns=["order", "hash_idx"]
-            )
-
-            # drop the last row as it contains the empty seq
-            wide_read_table = wide_read_table.head(-1)
-
-            # save to excel or parquet
-            if format == "excel" and setting:
-                savename = Path(project).joinpath(
-                    "11_read_table",
-                    "{}_{}_{}_read_table_part_{}.xlsx".format(
-                        index_key,
-                        Path(project).stem.replace("_apscale", ""),
-                        data_type,
-                        part_nr,
-                    ),
-                )
-
-                # save to excel
-                wide_read_table.to_excel(savename, index=False)
-
-            if format == "parquet" and setting:
-                savename = Path(project).joinpath(
-                    "11_read_table",
-                    "{}_{}_{}_read_table_part_{}.parquet.snappy".format(
-                        index_key,
-                        Path(project).stem.replace("_apscale", ""),
-                        data_type,
-                        part_nr,
-                    ),
-                )
-
-                # save to parquet
-                wide_read_table.to_parquet(savename, index=False)
-
-
-def sequence_groups_to_data_storage(
-    project: str, sequence_group_savename: str, hdf_savename: str, chunksize: int
-):
-    # load the group mapping as a dask dataframe, break in 10 MB chunks
-    group_mapping = dd.read_csv(
-        sequence_group_savename,
-        sep="\t",
-        names=["hash_idx", "hash", "seq", "group_idx"],
-        blocksize=10e6,
-    )
-
-    # load the read count data that needs to be updated with the group mappings
-    read_count_data = dd.read_hdf(
-        hdf_savename, key="read_count_data", chunksize=chunksize
-    )
-
-    # add the group idx to the read count data
-    sequence_group_read_count_data = dd.merge(
-        left=read_count_data,
-        right=group_mapping[["hash_idx", "group_idx"]],
-        how="left",
-        left_on="hash_idx",
-        right_on="hash_idx",
-    )
-
-    # save the group mapping in human readable format
-    group_mapping = group_mapping.rename(
-        columns={
-            "hash_idx": "Original sequence ID",
-            "group_idx": "Maps to group sequence ID",
+    # add correct datatype annotations
+    fasta_data = fasta_data.astype(
+        {
+            "sample": "string",
+            "hash": "string",
+            "sequence": "string",
+            "read_count": "int64",
         }
     )
 
-    # define the output savename, chunk to multiple files if neccessary
-    group_mapping_savename = Path(project).joinpath("11_read_table", "data")
+    # create an output path, save data to parquet to ingest into duckdb later
+    output_path = output_folder.joinpath(f"{fasta_name}.parquet.snappy")
+    fasta_data.to_parquet(output_path)
 
-    for idx, data_chunk in enumerate(group_mapping.to_delayed()):
-        # save the chunk to excel
-        data_chunk = data_chunk.compute()
-        data_chunk.to_excel(
-            group_mapping_savename.joinpath(f"group_mapping_log_part_{idx}.xlsx"),
-            index=False,
-        )
 
-    # add the sequence groups to the hdf store, replace group idx first, drop duplicates, so only the groups are left
-    group_mapping = group_mapping.drop(columns="Original sequence ID").rename(
-        columns={"Maps to group sequence ID": "hash_idx"}
+def build_read_store(input_folder, database_path):
+    # fetch the parquet files
+    parquet_path = input_folder.joinpath("*.parquet.snappy")
+
+    # connect to the database
+    read_data_store = duckdb.connect(database_path)
+
+    # attach a temp database to the read_data_store
+    temp_database = input_folder.joinpath("sequence_read_count_data.duckdb")
+    read_data_store.execute(f"ATTACH '{temp_database}' AS temp_db")
+
+    # add the readcounts from the parquet file to the table sequence_read_count_data
+    read_data_store.execute(
+        f"""
+        CREATE TABLE temp_db.sequence_read_count_data AS
+        SELECT * FROM read_parquet('{parquet_path}')
+        """
     )
 
-    # reorder the columns to make it look like the original
-    group_mapping = group_mapping[["hash_idx", "hash", "seq"]]
+    # add the sample data table
+    read_data_store.execute(
+        """
+        CREATE TABLE main.sample_data AS
+        SELECT 
+            row_number() OVER () AS sample_idx,
+            sample,  
+        FROM (
+            SELECT DISTINCT sample
+            FROM temp_db.sequence_read_count_data
+        )
+        """
+    )
 
-    # drop the duplicate values
-    group_mapping = group_mapping.drop_duplicates(subset="hash_idx", keep="first")
+    # add the sequence data table
+    read_data_store.execute(
+        """
+        CREATE TABLE main.sequence_data AS
+        SELECT 
+            row_number() OVER () AS sequence_idx,
+            hash,
+            sequence,
+        FROM (
+            SELECT DISTINCT hash, sequence
+            FROM temp_db.sequence_read_count_data
+        )
+        """
+    )
 
-    # give user output
+    # create the indexed read_count_data, drop the raw read_count_data
+    read_data_store.execute(
+        """
+        CREATE TABLE main.sequence_read_count_data AS
+        SELECT
+            sd.sample_idx,
+            seqd.sequence_idx,
+            srd.read_count 
+        FROM temp_db.sequence_read_count_data srd
+        JOIN main.sample_data sd ON srd.sample = sd.sample
+        JOIN main.sequence_data seqd ON srd.hash = seqd.hash AND srd.sequence = seqd.sequence
+    """
+    )
+
+    # detach and remove the temp db
+    read_data_store.execute("DETACH temp_db")
+    temp_database.unlink()
+
+    # add the counts and order for the fasta data
+    read_data_store.execute(
+        "ALTER TABLE sequence_data ADD COLUMN sequence_order BIGINT"
+    )
+    read_data_store.execute("ALTER TABLE sequence_data ADD COLUMN read_sum BIGINT")
+
+    read_data_store.execute(
+        """
+        UPDATE sequence_data AS sd
+        SET
+            sequence_order = r.sequence_order,
+            read_sum = r.read_sum
+        FROM (
+            SELECT
+                row_number() OVER (ORDER BY sum(read_count) DESC) AS sequence_order, 
+                sequence_idx, 
+                sum(read_count) AS read_sum
+            FROM sequence_read_count_data
+            GROUP BY sequence_idx  
+        ) r
+        WHERE sd.sequence_idx = r.sequence_idx
+    """
+    )
+
+    # give some user output
+    nr_samples = read_data_store.execute(
+        "SELECT COUNT(sample_idx) FROM sample_data"
+    ).fetchone()[0]
+    nr_sequences = (
+        read_data_store.execute(
+            "SELECT COUNT(sequence_idx) from sequence_data"
+        ).fetchone()[0]
+        - 1  # remove the empty seq
+    )
+    nr_reads = read_data_store.execute(
+        "SELECT SUM(read_sum) FROM sequence_data"
+    ).fetchone()[0]
+
     print(
-        "{}: {} sequence groups found.".format(
-            datetime.datetime.now().strftime("%H:%M:%S"),
-            group_mapping.shape[0].compute() - 1,
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Dataset contains {nr_samples:,} samples, {nr_sequences:,} distinct sequences and {nr_reads:,} reads."
+    )
+
+    # close the read data store
+    read_data_store.close()
+
+    # remove the parquet files
+    for file in Path(input_folder).glob("*.parquet.snappy"):
+        if file.is_file():
+            file.unlink()
+
+
+def generate_fasta(
+    project_name: str,
+    output_folder: str,
+    database_path: str,
+    sequence_type: str,
+) -> None:
+    """Function to read the database and create a fasta file either for sequences or sequence groups
+
+    Args:
+        project_name (str): Name of the current apscale project.
+        output_folder (str): Output folder to write to.
+        database_path (str): Path to the database where the data is stored.
+        sequence_type (str): Wether to write sequence or group
+    """
+    # establish the connection to the database
+    read_data_store = duckdb.connect(database_path)
+    read_data_store_cursor = read_data_store.execute(
+        f"SELECT hash, sequence FROM {sequence_type}_data WHERE sequence != 'dummy_seq' ORDER BY sequence_order"
+    )
+
+    sequence_or_group = {"sequence": 0, "group": 1}
+
+    output_fasta = Path(output_folder).joinpath(
+        f"{sequence_or_group[sequence_type]}_{project_name}_{sequence_type}s.fasta"
+    )
+
+    with open(output_fasta, "w") as out_stream:
+        while True:
+            fasta_batch = read_data_store_cursor.fetchmany(100_000)
+            if not fasta_batch:
+                break
+            lines = [f">{hash}\n{sequence}\n" for hash, sequence in fasta_batch]
+            out_stream.writelines(lines)
+
+    read_data_store.close()
+
+
+def generate_read_table(
+    project_name: str,
+    output_folder: str,
+    database_path: str,
+    sequence_type: str,
+    temp_folder: str,
+) -> None:
+    """Function to generate a read table from the database. Will be split into multiple tables if data is too large.
+
+    Args:
+        project_name (str): Name of the apscale project.
+        output_folder (str): Output folder to write to.
+        database_path (str): Path to the database to select the data from.
+        sequence_type (str): Wether to write sequence or group data.
+        temp_folder (str): Path to a temp folder for intermediate writes. Will be deleted at end of function.
+        to_excel: Wether to write output to excel or not.
+    """
+    # connect the database
+    read_data_store = duckdb.connect(database_path)
+    # define the temporal database for writing intermediate steps
+    temp_db = Path(temp_folder).joinpath("temp.duckdb")
+    read_data_store.execute(f"ATTACH '{temp_db}' as temp_db")
+    sequence_or_group = {"sequence": 0, "group": 1}
+
+    # gather some basic stats about the read store
+    # extract the number of sequences, includes the dummy_seq as it is removed after pivot
+    sequence_count = read_data_store.execute(
+        f"SELECT COUNT(hash) FROM main.{sequence_type}_data"
+    ).fetchone()[0]
+
+    # extract the sample names as they are needed regardles of output format
+    sample_names = read_data_store.execute(
+        "SELECT DISTINCT sample FROM main.sample_data ORDER BY sample ASC"
+    ).fetchall()
+    sample_names = [row[0] for row in sample_names]
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Building cross product of samples and sequences."
+    )
+
+    # build the cross product first
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.cross_product AS
+            SELECT
+                seqd.sequence_idx,
+                sd.sample_idx,
+                sd.sample,
+            FROM
+                main.{sequence_type}_data AS seqd
+            CROSS JOIN main.sample_data AS sd                    
+        """
+    )
+
+    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Joining in read counts.")
+
+    read_data_store.execute(
+        f"""
+    CREATE OR REPLACE TABLE temp_db.read_table_data AS
+        SELECT
+            cp.sequence_idx,
+            cp.sample_idx,
+            cp.sample,
+            COALESCE(rcd.read_count, 0) as read_count
+        FROM temp_db.cross_product AS cp
+        LEFT JOIN main.{sequence_type}_read_count_data AS rcd
+            ON cp.sequence_idx = rcd.sequence_idx
+            AND cp.sample_idx = rcd.sample_idx
+    """
+    )
+
+    # if excel is used as output format compute the maximum samples per excel
+    if sequence_count > 1_000_000:
+        print(
+            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Dataset with {sequence_count - 1:,} sequences is too large for excel. Only using parquet."
+        )
+    else:
+        print(
+            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Generating table(s) for Excel output."
+        )
+
+        # compute the maximum number of samples per file
+        chunksize = 10_000_000 // sequence_count
+
+        # fetch the sample names from read store
+        sample_names_iter = enumerate(more_itertools.chunked(sample_names, n=chunksize))
+
+        # for each chunk create a pivot table and stream it directly to excel
+        for idx, chunk in sample_names_iter:
+            sample_selector = ", ".join(f"'{sample}'" for sample in chunk)
+            sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
+
+            # select the subset of samples we are currently looking at
+            read_data_store.execute(
+                f"""
+                CREATE OR REPLACE TABLE temp_db.filtered AS  
+                    SELECT * FROM temp_db.read_table_data rtd
+                    WHERE rtd.sample IN ({sample_selector})
+                """
+            )
+
+            print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table.")
+
+            read_data_store.execute(
+                f"""
+                CREATE OR REPLACE TABLE temp_db.pivot AS
+                    SELECT sequence_idx, {sample_columns}
+                    FROM (
+                        SELECT sequence_idx, sample, read_count
+                        FROM temp_db.filtered
+                    )
+                    PIVOT (SUM(read_count) FOR sample IN ({sample_columns}))
+                """
+            )
+
+            print(
+                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes, sequences and ordering table."
+            )
+
+            read_table = read_data_store.execute(
+                f"""
+                SELECT
+                    sd.hash,
+                    sd.sequence,
+                    {sample_columns}
+                FROM main.{sequence_type}_data AS sd
+                LEFT JOIN temp_db.pivot AS pt
+                    ON sd.sequence_idx = pt.sequence_idx
+                WHERE sd.sequence != 'dummy_seq'
+                ORDER BY sd.sequence_order
+                """
+            ).df()
+
+            print(
+                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing Excel output file."
+            )
+
+            # define the output path
+            output_file_name_xlsx = Path(
+                output_folder.joinpath(
+                    f"{sequence_or_group[sequence_type]}_{project_name}_{sequence_type}_read_table_part_{idx}.xlsx"
+                )
+            )
+
+            # write the output, give user output
+            read_table.to_excel(output_file_name_xlsx, index=False, engine="xlsxwriter")
+
+    # always write output to parquet
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Generating table for parquet output."
+    )
+
+    # define the output file name
+    output_file_name_parquet = Path(
+        output_folder.joinpath(
+            f"{sequence_or_group[sequence_type]}_{project_name}_{sequence_type}_read_table.parquet.snappy"
         )
     )
 
-    # convert data types to write to hdf
-    group_mapping["hash"], group_mapping["seq"] = group_mapping["hash"].astype(
-        object
-    ), group_mapping["seq"].astype(object)
+    # create a sql friendly sample columns variable
+    sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
+    sample_selector = ", ".join(f"'{sample}'" for sample in sample_names)
 
-    # save to hdf
-    group_mapping.to_hdf(
-        hdf_savename, key="sequence_group_data", mode="a", compute=True
+    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table.")
+
+    # chunk the data
+    max_pivot_cells = 25_000_000  # reasonable for a 32 Gb machine
+    max_rows_per_chunk = max(1000, max_pivot_cells // len(sample_names))
+
+    # collect the sequence ids
+    sequence_ids = read_data_store.execute(
+        "SELECT sequence_idx FROM main.sequence_data"
+    ).fetchall()
+    sequence_ids = [row[0] for row in sequence_ids]
+    sequence_chunks = more_itertools.chunked(sequence_ids, max_rows_per_chunk)
+
+    # write output to parquet in chunks
+    for i, chunk in enumerate(sequence_chunks, start=1):
+        min_idx, max_idx = min(chunk), max(chunk)
+
+        # create a temp filename for output
+        temp_filename = Path(temp_folder.joinpath(f"pivot_chunk_{i}.parquet.snappy"))
+
+        # perform the pivot for this chunk
+        read_data_store.execute(
+            f"""
+            COPY (
+                SELECT sequence_idx, {sample_columns}
+                FROM (
+                    SELECT sequence_idx, sample, read_count
+                    FROM temp_db.read_table_data
+                    WHERE sequence_idx BETWEEN {min_idx} AND {max_idx}
+                )
+                PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
+            )
+            TO '{temp_filename}' (FORMAT PARQUET)
+            """
+        )
+
+        # give user output
+        print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Chunk {i} processed.")
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes and sequences, ordering table and writing parquet output."
     )
 
-    # transform sequence group read count data to write the fasta and to append it to hdf
-    sequence_group_read_count_data = (
-        sequence_group_read_count_data[["group_idx", "sample_idx", "read_count"]]
-        .groupby(by=["group_idx", "sample_idx"])
-        .sum()
-        .reset_index()
-        .rename(columns={"group_idx": "hash_idx"})
+    # create the parquet path to read the chunks from
+    parquet_path = Path(temp_folder.joinpath("pivot_chunk_*.parquet.snappy"))
+
+    # extract the read table with correct column names
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.pivot AS 
+            SELECT * FROM read_parquet('{parquet_path}')
+        """
     )
 
-    # save to hdf
-    sequence_group_read_count_data.to_hdf(
-        hdf_savename, key="sequence_group_read_count_data", mode="a", compute=True
+    # remove the parquet files
+    for file in temp_folder.glob("pivot_chunk_*.parquet.snappy"):
+        if file.is_file():
+            file.unlink()
+
+    # build the final read_table
+    read_table = read_data_store.execute(
+        f"""
+        COPY (
+            SELECT
+                sd.hash,
+                sd.sequence,
+                {sample_columns}
+            FROM main.sequence_data AS sd
+            LEFT JOIN temp_db.pivot AS pt
+                ON sd.sequence_idx = pt.sequence_idx
+            WHERE sd.sequence != 'dummy_seq'
+            ORDER BY sd.sequence_order
+        ) TO '{output_file_name_parquet}' (FORMAT 'parquet')
+        """
     )
+
+    # close the connection
+    read_data_store.close()
+    # remove the temp database
+    temp_db.unlink()
+
+
+def generate_sequence_groups(
+    project_name: str,
+    data_path: str,
+    database_path: str,
+    temp_path: str,
+    group_threshold: float,
+):
+    """Function to cluster sequences into groups with a fixed threshold.
+
+    Args:
+        project_name (str): Name of the Apscale project.
+        data_path (str): Path to save the final data.
+        database_path (str): Path to the duckdb database.
+        temp_path (str): Path to save temporary products.
+        group_threshold (float): Threshold to perform the grouping with.
+    """
+    # create the savename for the sequence fasta
+    sequence_fasta = Path(data_path).joinpath(f"0_{project_name}_sequences.fasta")
+    matchfile_path = Path(temp_path).joinpath(
+        f"{project_name}_{group_threshold}_matchfile.tsv"
+    )
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Computing matchfile with vsearch."
+    )
+
+    # compute the matchfile with vsearch
+    subprocess.run(
+        [
+            "vsearch",
+            "--usearch_global",
+            sequence_fasta,
+            "--db",
+            sequence_fasta,
+            "--id",
+            str(group_threshold),
+            "--userout",
+            matchfile_path,
+            "--quiet",
+            "--userfields",
+            "query+target+id",
+            "--maxaccepts",
+            str(0),
+            "--self",
+        ]
+    )
+
+    # ingest into duck db temp file to then join in data
+    read_data_store = duckdb.connect(database_path)
+    temp_db = Path(temp_path).joinpath("temp.duckdb")
+    read_data_store.execute(f"ATTACH '{temp_db}' as temp_db")
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.matchfile_temp AS
+        SELECT * FROM read_csv('{matchfile_path}',
+            delim = '\\t',
+            header = False,
+            columns = {{
+                'query': 'STRING',
+                'target': 'STRING',
+                'pct_id': 'DOUBLE'
+            }})
+        """
+    )
+
+    # add sequence_idx and order to the table and save in main table
+    read_data_store.execute(
+        f"""
+    CREATE OR REPLACE TABLE temp_db.group_lookup_table AS
+        SELECT 
+            mt.query,
+            mt.target,
+            mt.pct_id,
+            sd_query.sequence_idx AS query_idx,
+            sd_query.sequence_order AS query_order,
+            sd_target.sequence_idx AS target_idx,
+            sd_target.sequence_order AS target_order
+        FROM temp_db.matchfile_temp AS mt
+        LEFT JOIN main.sequence_data AS sd_query
+            ON mt.query = sd_query.hash
+        LEFT JOIN main.sequence_data AS sd_target
+            ON mt.target = sd_target.hash
+    """
+    )
+
+    # fetch the number of rows in the sequence data
+    nr_of_sequences = (
+        read_data_store.execute("SELECT COUNT(*) FROM main.sequence_data").fetchone()[0]
+        - 1
+    )
+
+    # fetch the ordered sequence data to loop over
+    sequence_data = read_data_store.execute(
+        f"""
+        SELECT * FROM main.sequence_data AS sd
+        WHERE sd.hash != 'dummy_hash'
+        ORDER BY sd.sequence_order
+        """
+    )
+
+    # flag to use the first sequence always as the first group
+    first = True
+
+    # open a second connection for the grouping operations
+    grouping_connection = duckdb.connect(database_path)
+
+    # create a temporary csv for pushing out the group mappings
+    mapping_csv_path = temp_path.joinpath(f"{project_name}_group_mapping.csv")
+
+    with open(mapping_csv_path, "w") as mapping_csv:
+        # give user output
+        sequence_counter = 0
+        with tqdm(total=nr_of_sequences, desc="Grouping sequences") as pbar:
+            while True:
+                chunk = sequence_data.fetch_df_chunk()
+                # stop when finished
+                if chunk.empty:
+                    break
+                # perform the sequence grouping
+                for (
+                    sequence_idx,
+                    hash,
+                    sequence,
+                    sequence_order,
+                    read_sum,
+                ) in chunk.itertuples(index=False):
+                    # extract the matches for this sequence_idx
+                    all_hash_matches = grouping_connection.execute(
+                        f"SELECT * FROM temp_db.group_lookup_table WHERE query_idx = {sequence_idx}"
+                    ).df()
+
+                    # if it is the first hit, write it to the groups found table
+                    if first:
+                        first = False
+                        # add this to the groups found table since it is by definition the first group found
+                        grouping_connection.execute(
+                            "CREATE OR REPLACE TABLE temp_db.groups_found AS SELECT * FROM all_hash_matches"
+                        )
+                        mapping_csv.write(f"{sequence_idx}\t{sequence_idx}\n")
+                        sequence_counter += 1
+                        pbar.update(1)
+                        continue
+
+                    # perform the actual grouping, select all potential matches for the current hash
+                    target_matches = grouping_connection.execute(
+                        f"""
+                        SELECT * FROM temp_db.groups_found sgf 
+                        WHERE sgf.target_idx = {sequence_idx}
+                        ORDER BY sgf.query_order LIMIT 1
+                        """
+                    ).df()
+                    # if there is not matching group, add the sequence and all target to the groups found --> it forms a new group
+                    if target_matches.empty:
+                        grouping_connection.execute(
+                            f"""
+                            INSERT INTO temp_db.groups_found SELECT * FROM all_hash_matches
+                            """
+                        )
+                        mapping_csv.write(f"{sequence_idx}\t{sequence_idx}\n")
+                        sequence_counter += 1
+                        pbar.update(1)
+                    # if there is a matching group it can be added to this group
+                    else:
+                        group_idx = target_matches["query_idx"].item()
+                        mapping_csv.write(f"{sequence_idx}\t{group_idx}\n")
+                        sequence_counter += 1
+                        pbar.update(1)
+
+    # add the group mapping to the main db
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE main.group_mapping AS
+        SELECT * FROM read_csv('{mapping_csv_path}',
+        delim = '\\t',
+        header = False,
+        columns = {{
+            'sequence_idx': 'BIGINT',
+            'group_idx': 'BIGINT'
+        }})                  
+        """
+    )
+
+    # add readcounts, merge the groups
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.group_data_temp AS
+        SELECT 
+            gmt.group_idx AS sequence_idx,
+            SUM(sd.read_sum) as read_sum
+        FROM main.group_mapping AS gmt
+        LEFT JOIN main.sequence_data sd
+            ON gmt.sequence_idx = sd.sequence_idx
+        GROUP BY gmt.group_idx
+        """
+    )
+
+    # add hash and sequence
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE main.group_data AS
+        SELECT
+            gdt.sequence_idx,
+            sd.hash,
+            sd.sequence,
+            row_number() OVER (ORDER BY gdt.read_sum DESC) AS sequence_order,
+            gdt.read_sum
+        FROM temp_db.group_data_temp AS gdt
+        LEFT JOIN main.sequence_data AS sd
+            ON gdt.sequence_idx = sd.sequence_idx
+        """
+    )
+
+    nr_of_groups = read_data_store.execute(
+        "SELECT COUNT(*) FROM main.group_data"
+    ).fetchone()[0]
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Found {nr_of_groups} sequence groups. Updating read data storage."
+    )
+
+    # update the sequence_idx column in sequence_read_count_data with group_idx
+    # coalesce to include the dummy hash / dummy seq
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.group_data_temp AS
+        SELECT 
+            srcd.sample_idx,
+            COALESCE(gm.group_idx, srcd.sequence_idx) AS sequence_idx,
+            srcd.read_count
+        FROM main.sequence_read_count_data AS srcd
+        LEFT JOIN main.group_mapping AS gm
+            ON srcd.sequence_idx = gm.sequence_idx
+        """
+    )
+
+    # groupby sample_idx (any), sequence_idx (any), sum(read_count)
+    read_data_store.execute(
+        f"""
+    CREATE OR REPLACE TABLE main.group_read_count_data AS
+        SELECT
+            gdt.sample_idx,
+            gdt.sequence_idx,
+            SUM(gdt.read_count) AS read_count
+        FROM temp_db.group_data_temp AS gdt
+        GROUP BY gdt.sample_idx, gdt.sequence_idx
+    """
+    )
+
+    read_data_store.close()
+    grouping_connection.close()
+
+    # remove files no longer needed
+    if temp_db.is_file():
+        temp_db.unlink()
+
+    if matchfile_path.is_file():
+        matchfile_path.unlink()
+
+    if mapping_csv_path.is_file():
+        mapping_csv_path.unlink()
+
+
+def write_log(logfile_base_path: str, database_path: str):
+    """Function to log the group mapping.
+
+    Args:
+        logfile_base_path (str): Path to the logfile to write to.
+        database_path (str): Path to the duckdb database
+    """
+    # connect to the read data store
+    read_data_store = duckdb.connect(database_path)
+
+    logfile_cursor = read_data_store.execute(
+        f"""
+        SELECT
+            gm.group_idx,
+            sd.hash,
+            gm.sequence_idx,
+            sd.read_sum,
+        FROM group_mapping AS gm
+        LEFT JOIN sequence_data AS sd
+            ON gm.sequence_idx = sd.sequence_idx
+        LEFT JOIN group_data AS gd
+            ON gm.group_idx = gd.sequence_idx
+        ORDER BY gd.sequence_order, sd.read_sum DESC
+        """
+    )
+
+    # keep track of the files written to far
+    file_nr = 1
+
+    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing logs.")
+
+    while True:
+        # fetch 100 x 2048 rows for each sub log
+        chunk = logfile_cursor.fetch_df_chunk(100)
+        if chunk.empty:
+            break
+
+        # generate a logfile name if multiple logs have to be written
+        logfile_name = Path(logfile_base_path).joinpath(
+            f"Logfile_11_read_table_part_{file_nr}.xlsx"
+        )
+        chunk.to_excel(logfile_name, engine="xlsxwriter", index=False)
 
 
 def main(project=Path.cwd()):
@@ -760,38 +769,44 @@ def main(project=Path.cwd()):
     Args:
         project (str, optional): Path to the apscale project to work in. Defaults to Path.cwd().
     """
+    # collect the general settings
+    gen_settings = pd.read_excel(
+        Path(project).joinpath(
+            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+        ),
+        sheet_name="0_general_settings",
+    )
+    cores = gen_settings["cores to use"].item()
 
     # collect the settings from the excel sheet
     settings = pd.read_excel(
         Path(project).joinpath(
-            "Settings_{}.xlsx".format(Path(project).name.replace("_apscale", ""))
+            f"Settings_{Path(project).name.replace('_apscale', '')}.xlsx"
         ),
         sheet_name="11_read_table",
     )
-    perform = settings["generate read table"].item()
-    to_excel = settings["to excel"].item()
-    to_parquet = settings["to parquet"].item()
+    perform_read_table_calc = settings["generate read table"].item()
     group_threshold = settings["sequence group threshold"].item()
+
+    # check for valid group thereshold
+    if not 0 < group_threshold <= 1:
+        print(
+            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Group threshold needs to be between 0 and 1."
+        )
+        sys.exit()
 
     # find out which dataset to load
     prior_step = choose_input(project, "11_generate_read_table")
 
-    # check that at least one hashing step has been performed
-    if prior_step == "06_dereplication":
-        ## give user output
-        print(
-            "{}: Please perform at least on data aggregation step before creating the read table.".format(
-                datetime.datetime.now().strftime("%H:%M:%S")
-            )
-        )
-        return None
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Last analysis step was {prior_step}. Using data from this step."
+    )
 
     # collect the input for read table generation
     # generate a data folder to save the hdf store
     input_files = glob.glob(
         str(Path(project).joinpath(prior_step, "data", "*.fasta.gz"))
     )
-
     # generate a temp folder for saving the buffered dicts
     ## create temporal output folder
     for folder in ["temp", "data"]:
@@ -800,105 +815,92 @@ def main(project=Path.cwd()):
         except FileExistsError:
             pass
 
+    data_path = Path(project).joinpath("11_read_table", "data")
+    temp_path = Path(project).joinpath("11_read_table", "temp")
+    project_name = Path(project).stem.replace("_apscale", "")
+    database_path = data_path.joinpath(f"{project_name}_read_data_storage.duckdb")
+    logfile_base_path = Path(project).joinpath("11_read_table")
+
+    # check if there is an old db, remove it if it is
+    if database_path.is_file():
+        database_path.unlink()
+
+    # check if there are old parquet files, remove them
+    for file in temp_path.glob("*.parquet.snappy"):
+        if file.is_file():
+            file.unlink()
+
+    # check if there are old parquet files and remove them first
+
     print(
-        "{}: Building data storage.".format(
-            datetime.datetime.now().strftime("%H:%M:%S")
-        )
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Building read data storage."
     )
 
-    # index all the data and save as hdf store
-    hdf_savename = index_data_to_hdf(project, input_files, 100_000)
-
-    print(
-        "{}: Saving sequences to fasta.".format(
-            datetime.datetime.now().strftime("%H:%M:%S")
-        )
-    )
-
-    # sort the hdf store to generate the fasta file, generate the fasta file
-    fasta_savename = generate_fasta(
-        project, hdf_savename, 100_000, data_type="sequences"
-    )
-
-    # create parquet and excel outputs from the hdf
-    print(
-        "{}: Generating read table(s) for sequences.".format(
-            datetime.datetime.now().strftime("%H:%M:%S")
-        )
-    )
-
-    # generate the read tables if requests
-    if perform:
-        generate_read_table(
-            project,
-            hdf_savename,
-            to_excel,
-            to_parquet,
-            data_type="sequences",
-        )
-
-    # generate sequence groups
-    if group_threshold >= 1:
-        # user output
-        print(
-            "{}: Grouping threshold cannot be larger or equal to one. Step will be skipped.".format(
-                datetime.datetime.now().strftime("%H:%M:%S")
-            )
-        )
-    elif group_threshold <= 0 or math.isnan(group_threshold):
-        # user output
-        print(
-            "{}: Grouping threshold cannot 0 or smaller. Step will be skipped.".format(
-                datetime.datetime.now().strftime("%H:%M:%S")
-            )
+    # only perform hashing if no aggregation step has been used before
+    if prior_step == "06_dereplication":
+        # transform all fasta files in input to parquet to ingest into duckdb
+        Parallel(n_jobs=cores)(
+            delayed(fasta_to_parquet)(fasta_file, temp_path, True)
+            for fasta_file in input_files
         )
     else:
-        # user output
+        # transform all fasta files in input to parquet to ingest into duckdb
+        Parallel(n_jobs=cores)(
+            delayed(fasta_to_parquet)(fasta_file, temp_path, False)
+            for fasta_file in input_files
+        )
+
+    # build the duckdb database
+    build_read_store(temp_path, database_path)
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Read data storage build successfully."
+    )
+
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating fasta file for sequences."
+    )
+
+    # create the fasta file for the sequences
+    generate_fasta(project_name, data_path, database_path, "sequence")
+
+    # create the read table for the sequences
+    if perform_read_table_calc:
         print(
-            "{}: Group threshold of {} detected. Sequence groups are calculated.".format(
-                datetime.datetime.now().strftime("%H:%M:%S"), group_threshold
-            )
+            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating read table(s)."
+        )
+        generate_read_table(
+            project_name, data_path, database_path, "sequence", temp_path
         )
 
-        # calculate the sequence groups
-        sequence_group_savename = generate_sequence_groups(
-            project,
-            hdf_savename,
-            fasta_savename,
-            group_threshold,
-            chunksize=100_000,
-        )
+    # sequence grouping
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Starting sequence grouping with a threshold of {group_threshold}."
+    )
 
-        # update the data storage, generate user log
-        sequence_groups_to_data_storage(
-            project, sequence_group_savename, hdf_savename, chunksize=100_000
-        )
+    generate_sequence_groups(
+        project_name, data_path, database_path, temp_path, group_threshold
+    )
 
-        # generate fasta file for the sequence groups
+    # sequence grouping
+    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Grouping finished.")
+
+    # fasta for sequence groups
+    print(
+        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating fasta file for sequence groups."
+    )
+    generate_fasta(project_name, data_path, database_path, "group")
+
+    # create the read table for the groups
+    if perform_read_table_calc:
         print(
-            "{}: Saving sequence groups to fasta.".format(
-                datetime.datetime.now().strftime("%H:%M:%S")
-            )
+            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating read table(s)."
         )
+        generate_read_table(project_name, data_path, database_path, "group", temp_path)
 
-        # sort the hdf store to generate the fasta file, generate the fasta file
-        fasta_savename = generate_fasta(
-            project, hdf_savename, 100_000, data_type="sequence_groups"
-        )
+    # finally write a human readable log for the group mapping
+    write_log(logfile_base_path, database_path)
 
-        # create parquet and excel outputs from the hdf
-        print(
-            "{}: Generating read table(s) for sequence groups.".format(
-                datetime.datetime.now().strftime("%H:%M:%S")
-            )
-        )
-
-        # generate read tables for the sequences groups
-        if perform:
-            generate_read_table(
-                project,
-                hdf_savename,
-                to_excel,
-                to_parquet,
-                data_type="sequence_groups",
-            )
+    # remove the temporary folder
+    if temp_path.is_dir():
+        temp_path.rmdir()
