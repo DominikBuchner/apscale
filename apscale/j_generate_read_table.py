@@ -633,8 +633,8 @@ def generate_sequence_groups(
         delim = '\\t',
         header = False,
         columns = {{
-            'sequence_idx': 'HUGEINT',
-            'group_idx': 'HUGEINT'
+            'sequence_idx': 'BIGINT',
+            'group_idx': 'BIGINT'
         }})                  
         """
     )

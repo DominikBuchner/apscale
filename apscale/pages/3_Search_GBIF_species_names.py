@@ -140,6 +140,10 @@ def query_gbif(read_data_to_modify: str, species_column: str):
         read_data_to_modify.execute(
             "ALTER TABLE sequence_metadata DROP COLUMN gbif_taxonomy"
         )
+        # add a fresh column
+        read_data_to_modify.execute(
+            "ALTER TABLE sequence_metadata ADD COLUMN gbif_taxonomy TEXT"
+        )
     except duckdb.BinderException:
         # add a fresh column
         read_data_to_modify.execute(
@@ -153,6 +157,32 @@ def query_gbif(read_data_to_modify: str, species_column: str):
     SET gbif_taxonomy = gtp.gbif_taxonomy
     FROM gbif_tax_parquet AS gtp
     WHERE smd."{species_column}" = gtp."{species_column}"
+    """
+    )
+
+    # also add to the group metadata
+    # drop a potential existing column
+    try:
+        read_data_to_modify.execute(
+            "ALTER TABLE group_metadata DROP COLUMN gbif_taxonomy"
+        )
+        # add a fresh column
+        read_data_to_modify.execute(
+            "ALTER TABLE group_metadata ADD COLUMN gbif_taxonomy TEXT"
+        )
+    except duckdb.BinderException:
+        # add a fresh column
+        read_data_to_modify.execute(
+            "ALTER TABLE group_metadata ADD COLUMN gbif_taxonomy TEXT"
+        )
+
+    # add to the sequence metadata
+    read_data_to_modify.execute(
+        f"""
+    UPDATE group_metadata AS gmd
+    SET gbif_taxonomy = gtp.gbif_taxonomy
+    FROM gbif_tax_parquet AS gtp
+    WHERE gmd."{species_column}" = gtp."{species_column}"
     """
     )
 
@@ -170,7 +200,10 @@ def query_gbif(read_data_to_modify: str, species_column: str):
 def check_gbif_taxonomy(read_data_to_modify):
     # connect to database
     read_data_to_modify = duckdb.connect(read_data_to_modify)
-    info = read_data_to_modify.execute("PRAGMA table_info(sequence_metadata)").df()
+    try:
+        info = read_data_to_modify.execute("PRAGMA table_info(sequence_metadata)").df()
+    except duckdb.CatalogException:
+        return False
     read_data_to_modify.close()
 
     if "gbif_taxonomy" in info["name"].to_list():
@@ -249,7 +282,7 @@ def main():
 
                 st.rerun()
 
-    if not gbif_taxonomy_available and not sequence_metadata_available:
+    if not gbif_taxonomy_available and not seq_data_col_names:
         st.write("**Please add proper sequence metadata first.**")
 
 

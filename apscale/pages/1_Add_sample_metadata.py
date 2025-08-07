@@ -149,7 +149,7 @@ def display_column_datatypes(metadata_parquet: str):
         SELECT {preview_columns} FROM read_parquet('{metadata_parquet}') LIMIT 5
         """
     ).df()
-    st.write("**Current selection:**")
+    st.write("**Current selection preview:**")
     st.write(preview)
 
     # return if no field is empty

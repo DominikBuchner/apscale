@@ -222,6 +222,20 @@ def save_to_read_store(
     """
     )
 
+    # create a copy for the group metadata by joining the two tables
+    read_data_store.execute(
+        f"""
+        CREATE OR REPLACE TABLE group_metadata AS
+        (
+            SELECT 
+                smd.*
+            FROM group_data AS gd
+            LEFT JOIN sequence_metadata AS smd
+                ON gd.sequence_idx = smd.sequence_idx
+        )
+        """
+    )
+
     # remove the parquet
     metadata_parquet.unlink()
 

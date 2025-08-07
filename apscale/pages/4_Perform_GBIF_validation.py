@@ -284,7 +284,10 @@ def validation_api_request(species_name, wkt_string) -> str:
                 scientificName=species_name, geometry=wkt_string, timeout=60
             )
             break
-        except requests.exceptions.HTTPError as e:
+        except (
+            requests.exceptions.HTTPError,
+            requests.exceptions.ConnectionError,
+        ) as e:
             if e.response.status_code == 429:
                 time.sleep(1)
                 continue
@@ -386,6 +389,61 @@ def add_validation_to_metadata(read_data_to_modify, temp_folder):
     for file in temp_folder.glob("gbif_validation_*.parquet.snappy"):
         if file.is_file():
             file.unlink()
+
+    # infer gbif validation for groups from sequence metadata
+    # create a view with joined in gbif validation
+    read_data_to_modify_con.execute(
+        f"""
+        CREATE OR REPLACE TEMPORARY VIEW group_validation_temp AS
+        (
+            SELECT 
+                gm.*,
+                smd.gbif_validation
+            FROM group_mapping AS gm
+            LEFT JOIN sequence_metadata AS smd
+                ON gm.sequence_idx = CAST(smd.sequence_idx AS HUGEINT)
+            WHERE smd.gbif_validation IS NOT NULL
+        )
+        """
+    )
+
+    # group by group idx, cast plausible on output if any is plausible
+    read_data_to_modify_con.execute(
+        f"""
+        CREATE OR REPLACE TEMPORARY VIEW group_validation AS
+        SELECT
+            group_idx,
+            CASE
+                WHEN BOOL_OR(gbif_validation = 'plausible') THEN 'plausible'
+                ELSE 'implausible'
+            END AS gbif_validation
+        FROM group_validation_temp
+        GROUP BY group_idx
+        """
+    )
+
+    # add a new column to the group_metadata column and fill it with the gbif_validation
+    # check if sequence gbif validation is in the database
+    info = read_data_to_modify_con.execute("PRAGMA table_info(group_metadata)").df()
+    info = info["name"].to_list()
+
+    if "gbif_validation" not in info:
+        read_data_to_modify_con.execute(
+            "ALTER TABLE group_metadata ADD COLUMN gbif_validation TEXT"
+        )
+
+    # add the validation to the group metadata
+    read_data_to_modify_con.execute(
+        f"""
+        UPDATE group_metadata AS gmd
+        SET gbif_validation = gv.gbif_validation
+        FROM group_validation AS gv
+        WHERE gmd.sequence_idx = gv.group_idx
+        """
+    )
+
+    # close the connection
+    read_data_to_modify_con.close()
 
 
 def gbif_validation_performed(read_data_to_modify: str) -> bool:
@@ -590,8 +648,6 @@ def main():
         if reset_vali:
             reset_validation(st.session_state["read_data_to_modify"])
             st.rerun()
-
-    # display a preview for the validated data (can be found in sequence metadata)
 
 
 main()
