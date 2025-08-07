@@ -16,7 +16,6 @@ setuptools.setup(
     license="MIT",
     install_requires=[
         "openpyxl >= 3.0.10",
-        "dask >=2025.3.0",
         "psutil >= 5.8.0",
         "duckdb>=1.3.1",
         "more_itertools >= 10.5.0",
@@ -34,7 +33,6 @@ setuptools.setup(
         "pyproj >= 3.4.1",
         "Shapely >= 2.1.1",
         "streamlit >= 1.45.1",
-        "zict >= 3.0.0",
         "tables >= 3.9.0",
     ],
     include_package_data=True,
