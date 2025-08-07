@@ -1,89 +1,90 @@
-import pyproj, json, time, requests
-import dask.dataframe as dd
-import streamlit as st
+import duckdb, pyproj, time, requests
 import pandas as pd
-from pygbif import occurrences as occ
+import pathlib
+from joblib import Parallel, delayed
+import streamlit as st
 from pathlib import Path
 from shapely.geometry import MultiPoint
 from shapely.ops import transform
 from shapely.geometry.polygon import orient
 from shapely import wkt
-import numpy as np
+from pygbif import occurrences as occ
 
 
-def check_metadata(read_data_to_modify: str) -> dict:
-    """Function to check if the required metadata is available.
+def check_metadata(read_data_to_modify):
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    # check for sequence metadata
+    try:
+        read_data_to_modify.execute("SELECT * FROM sequence_metadata LIMIT 1")
+        sequence_metadata = True
+    except duckdb.CatalogException:
+        sequence_metadata = False
 
-    Args:
-        read_data_to_modify (str): Path to the modified read storage.
+    # check for sample metadata
+    try:
+        read_data_to_modify.execute("SELECT * FROM sample_metadata LIMIT 1")
+        sample_metadata = True
+    except duckdb.CatalogException:
+        sample_metadata = False
 
-    Returns:
-        dict: Returns a dict with {sample_metadata: bool, gbif_taxonomy: bool}
-    """
-    return_dict = {"sample_metadata": False, "gbif_taxonomy": False}
+    # check for gbif taxonomy
+    try:
+        read_data_to_modify.execute(
+            "SELECT gbif_taxonomy FROM sequence_metadata LIMIT 1"
+        )
+        gbif_taxonomy = True
+    except duckdb.BinderException:
+        gbif_taxonomy = False
 
-    # check if the required keys are in the read data to modify
-    with pd.HDFStore(read_data_to_modify, "r") as hdf_store:
-        if "/sample_metadata" in hdf_store.keys():
-            return_dict["sample_metadata"] = True
-        if "/gbif_taxonomy" in hdf_store.keys():
-            return_dict["gbif_taxonomy"] = True
+    read_data_to_modify.close()
 
-    return return_dict
-
-
-def sample_metadata_columns(read_data_to_modify: str) -> bool:
-    """Function to quickly extract the metadata columns from the read data.
-
-    Returns:
-        bool: True if available, else False
-    """
-    with pd.HDFStore(read_data_to_modify) as store:
-        if "/sample_metadata" in store.keys():
-            col_names = store.get_storer("sample_metadata").table.colnames
-            col_names = [name for name in col_names if name != "index"]
-            return col_names
-        else:
-            return []
+    return sequence_metadata, sample_metadata, gbif_taxonomy
 
 
-def file_preview(read_data_to_modify: str, lat_col: str, lon_col: str) -> object:
-    """Function to generate a file preview on the fly for the selected columns
-
-    Args:
-        read_data_to_modify (str): Read store to look up the data
-        lat_col (str): selected column for latitude
-        lon_col (str): selected column for longitude
-
-    Returns:
-        object: First few columns of the generated dataframe
-    """
-    with pd.HDFStore(read_data_to_modify, mode="r") as store:
-        row_limit = min(store.get_storer("sample_metadata").nrows, 5)
-
-    preview = pd.read_hdf(
-        read_data_to_modify,
-        key="sample_metadata",
-        start=0,
-        stop=row_limit,
-        columns=["sample_name", lat_col, lon_col],
-    )
-
-    return preview
+def collect_sample_metadata_cols(read_data_to_modify: str) -> list:
+    # create the connection
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    info = read_data_to_modify.execute("PRAGMA table_info(sample_metadata)").df()
+    read_data_to_modify.close()
+    return info["name"].to_list()
 
 
-def compute_polygon_wkt(coordinates: list, radius: int) -> object:
-    """Function to compute a polygon from coordinates and expand it by radius
+def generate_file_preview(
+    read_data_to_modify: str, lat_col: str, lon_col: str
+) -> pd.DataFrame:
+    # create the connection
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    preview_frame = read_data_to_modify.execute(
+        f"""
+        SELECT 
+            sample_idx,
+            sample,
+            {lat_col},
+            {lon_col}
+        FROM sample_metadata    
+        LIMIT 20
+        """
+    ).df()
 
-    Args:
-        coordinates (list): Coordinates to base the polygon on.
-        radius (int): Radius to expand the polygon
+    return preview_frame
 
-    Returns:
-        object:
-    """
-    # generate a multipoint object and compute the convex hull
-    mp = MultiPoint(coordinates)
+
+def compute_wkt_string(read_data_to_modify, sequence_idx, radius, lat_col, lon_col):
+    # establish a new connection
+    con = duckdb.connect(read_data_to_modify, read_only=True)
+    data = con.execute(
+        f"""SELECT
+            "{lat_col}", 
+            "{lon_col}"
+            FROM temp_db.distribution_data
+            WHERE sequence_idx = {sequence_idx}
+        """
+    ).df()
+
+    # extract the coordinates
+    coords = list(zip(data[lon_col], data[lat_col]))
+    # compute the multiploint
+    mp = MultiPoint(coords)
     hull = mp.convex_hull
 
     # change projection to expand by kilometers
@@ -99,293 +100,399 @@ def compute_polygon_wkt(coordinates: list, radius: int) -> object:
     buffered_geo = transform(project_back, buffered)
     buffered_geo = orient(buffered_geo, sign=1).wkt
 
+    con.close()
+
     return buffered_geo
 
 
-def add_polygon_column(dataframe: object, radius: int):
-    """Helper function to compute the polygons per row
-
-    Args:
-        dataframe (object): Dataframe to perform the operation on.
-        radius (_type_): Radius to expand the polygon
-    """
-    dataframe["polygon_wkt"] = dataframe["lon_lat_list"].map(
-        lambda coords: compute_polygon_wkt(coords, radius)
-    )
-
-    return dataframe
-
-
 def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius):
-    # read the gbif species
-    gbif_species = dd.read_hdf(read_data_to_modify, key="gbif_taxonomy")
-    gbif_species = gbif_species.dropna().reset_index()
+    # create a temp path to save intermediate results
+    temp_folder = read_data_to_modify.parent.parent.joinpath("temp")
+    temp_folder.mkdir(exist_ok=True)
+    connection_path = read_data_to_modify
 
-    # load the readcount data
-    read_count_data = dd.read_hdf(read_data_to_modify, key="read_count_data")
+    # connect to database
+    read_data_to_modify = duckdb.connect(read_data_to_modify)
+    temp_db = Path(temp_folder).joinpath("temp.duckdb")
+    read_data_to_modify.execute(f"ATTACH '{temp_db}' as temp_db")
 
-    # compute the readsum data that is needed for sorting in the end
-    readsum_data = (
-        read_count_data.groupby(by=["hash_idx"])
-        .sum()
-        .reset_index()[["hash_idx", "read_count"]]
+    # collect the read count data and join in the required sequence metadata
+    read_data_to_modify.execute(
+        f"""
+        CREATE OR REPLACE TABLE temp_db.distribution_data AS 
+        SELECT 
+            srcd.sequence_idx,
+            srcd.sample_idx, 
+            smd.sequence_order,
+            smd.gbif_taxonomy,
+            samd."{lat_col}" AS lat,
+            samd."{lon_col}" AS lon, 
+        FROM main.sequence_read_count_data srcd
+        LEFT JOIN main.sequence_metadata smd
+            ON srcd.sequence_idx = smd.sequence_idx
+        LEFT JOIN main.sample_metadata samd
+            ON srcd.sample_idx = samd.sample_idx
+        WHERE smd.gbif_taxonomy IS NOT NULL 
+        """
     )
 
-    # merge frames to only keep occurences of the gbif species
-    read_count_data = read_count_data.merge(
-        gbif_species, left_on="hash_idx", right_on="hash_idx", how="inner"
+    # close connection that can be used for writing
+    read_data_to_modify.close()
+
+    # open a new read_only connection
+    read_only = duckdb.connect(temp_db, read_only=True)
+
+    # fetch all distinct sequence_idx values from there
+    distinct_sequences = read_only.execute(
+        "SELECT DISTINCT sequence_idx FROM temp_db.distribution_data"
     )
+    chunk_count = 1
 
-    # add the sequence metadata to show hash values instead of idx, as idx is not sorted
-    sequence_metadata = dd.read_hdf(
-        read_data_to_modify, key="sequence_metadata", columns=["hash", "seq"]
-    )
-    sequence_metadata = sequence_metadata.reset_index()
-    read_count_data = read_count_data.merge(
-        sequence_metadata, left_on="hash_idx", right_on="hash_idx", how="left"
-    )
+    # loop over in chunks
+    while True:
+        data_chunk = distinct_sequences.fetch_df_chunk(1)
+        if data_chunk.empty:
+            break
+        else:
+            # process each chunk seperately. data inside the chunk can be processed in parallel
+            wkts = Parallel(n_jobs=-2)(
+                delayed(compute_wkt_string)(temp_db, idx, radius, lat_col, lon_col)
+                for idx in data_chunk["sequence_idx"]
+            )
+            # create a dataframe with idx wkt
+            wkt_df = pd.DataFrame(
+                data=zip(data_chunk["sequence_idx"], wkts),
+                columns=["sequence_idx", "wkt_string"],
+            )
+            wkt_df["radius"] = radius
+            # save to parquet for intermediate results
+            output_file_name = temp_folder.joinpath(
+                f"wkt_chunk_{chunk_count}.parquet.snappy"
+            )
+            chunk_count += 1
+            wkt_df.to_parquet(output_file_name)
+    # close the read only connection
+    read_only.close()
 
-    # add lon lat data
-    sample_metadata = dd.read_hdf(
-        read_data_to_modify, key="sample_metadata", columns=[lon_col, lat_col]
-    )
-    read_count_data = read_count_data.merge(
-        sample_metadata, left_on="sample_idx", right_on="sample_idx", how="left"
-    )
+    # ingest parquet files into duckdb for temporary display of data
+    parquet_path = temp_folder.joinpath("wkt_*.parquet.snappy")
 
-    read_count_data["lon_lat"] = read_count_data[[lon_col, lat_col]].apply(
-        lambda row: (row[lon_col], row[lat_col]), axis=1, meta=("lon_lat", "object")
-    )
+    # open a connection to the temp.db
+    temp_db = duckdb.connect(temp_db)
 
-    # group by hash_idx to collect the data for the polygon
-    read_count_data = (
-        read_count_data.groupby(
-            by=["hash_idx", "gbif_taxonomy", "hash", "seq"], sort=False
-        )["lon_lat"]
-        .apply(lambda x: list(x), meta=("lon_lat_list", "object"))
-        .reset_index()
-    )
-
-    meta = {
-        "hash_idx": "int64",
-        "gbif_taxonomy": "object",
-        "hash": "object",
-        "seq": "object",
-        "read_count": "int64",
-        "lon_lat_list": "object",
-    }
-
-    meta = read_count_data.head(1).iloc[0:0]
-    read_count_data = read_count_data.map_partitions(lambda x: x, meta=meta)
-
-    # add the readsum data to sort by it
-    read_count_data = read_count_data.merge(
-        readsum_data, left_on="hash_idx", right_on="hash_idx", how="left"
-    ).sort_values(by="read_count", axis=0, ascending=False)
-
-    # define the meta for the output
-    sample = read_count_data.head(1)
-    sample["polygon_wkt"] = ""
-    meta = sample.iloc[0:0]
-
-    # add the polygon data
-    read_count_data = read_count_data.map_partitions(
-        add_polygon_column, radius, meta=meta
-    )
-
-    # only strings can be streamed to hdf
-    read_count_data["gbif_taxonomy"] = read_count_data["gbif_taxonomy"].astype(str)
-    read_count_data["hash"] = read_count_data["hash"].astype(str)
-    read_count_data["seq"] = read_count_data["seq"].astype(str)
-    read_count_data["lon_lat_list"] = read_count_data["lon_lat_list"].apply(
-        json.dumps, meta=("lon_lat_list", "str")
-    )
-    read_count_data["radius"] = radius
-
-    # save to hdf to use later for the validation of records
-    read_count_data.to_hdf(
-        read_data_to_modify,
-        key="gbif_taxonomy_distribution",
-        mode="a",
-        format="table",
-    )
-
-
-def extract_map_data(read_data_to_modify: object, hash_idx: int) -> object:
-    """Function to extract map data for a given hash_idx to perform some basic plotting
-
-    Args:
-        read_data_to_modify (object): Read store to work in.
-        hash_idx (int): The hash_idx to return a dataframe for.
-
-    Returns:
-        object: A dataframe that can be used for plotting
+    # add the wkt data to the temp db
+    temp_db.execute(
+        f"""
+    CREATE OR REPLACE TABLE wkt_data AS
+    SELECT * FROM read_parquet("{parquet_path}")
     """
-    hash_idx_data = dd.read_hdf(
-        read_data_to_modify,
-        key="gbif_taxonomy_distribution",
-        columns=["hash_idx", "lon_lat_list", "polygon_wkt"],
-    )
-    hash_idx_data = hash_idx_data[hash_idx_data["hash_idx"] == hash_idx].compute()
-
-    # compute the dataframe and then transform it correctly
-    hash_idx_data["lon_lat_list"] = hash_idx_data["lon_lat_list"].apply(
-        lambda x: json.loads(x)
     )
 
-    # restore the points from the wkt polygon
-    hash_idx_data["polygon_wkt"] = hash_idx_data["polygon_wkt"].apply(
-        lambda x: list(wkt.loads(x).exterior.coords)
+    # remove the temp parquet files
+    for file in temp_folder.glob("wkt_*.parquet.snappy"):
+        if file.is_file():
+            file.unlink()
+
+    # close the connection
+    temp_db.close()
+
+
+def wkt_calculated(temp_db):
+    # create the path to the temp db
+    if temp_db.is_file():
+        temp_connection = duckdb.connect(temp_db)
+    else:
+        return False
+    # try to read from the table
+    try:
+        wkt_data = temp_connection.execute("SELECT * FROM wkt_data LIMIT 1")
+        return True
+    except duckdb.CatalogException:
+        return False
+
+
+def generate_map_preview_table(temp_db) -> pd.DataFrame:
+    # open the connection
+    temp_db_con = duckdb.connect(temp_db)
+    # create a view with thejoined tables
+    temp_db_con.execute(
+        f"""
+        CREATE OR REPLACE TEMPORARY VIEW preview_table AS 
+        SELECT 
+            DISTINCT(wkt.sequence_idx),
+            dd.gbif_taxonomy,
+            wkt.radius
+        FROM wkt_data AS wkt
+        LEFT JOIN distribution_data AS dd
+            ON wkt.sequence_idx = dd.sequence_idx
+        ORDER BY dd.gbif_taxonomy, wkt.sequence_idx
+        """
     )
 
-    # handle lon lad and polygon data seperatly
-    occurence_data = hash_idx_data[["hash_idx", "lon_lat_list"]].explode("lon_lat_list")
+    preview = temp_db_con.execute("SELECT * FROM preview_table").df()
+
+    return preview, preview["sequence_idx"].to_list()
+
+
+def select_map_data(temp_db, sequence_idx) -> pd.DataFrame:
+    # create the duckdb connection
+    temp_db_con = duckdb.connect(temp_db)
+
+    occurence_data = temp_db_con.execute(
+        f"""
+        SELECT 
+            lon, 
+            lat
+        FROM distribution_data AS dd
+        WHERE dd.sequence_idx = {sequence_idx}
+        """
+    ).df()
+    # add a label for the map
     occurence_data["label"] = "occurence"
-    occurence_data[["lon", "lat"]] = pd.DataFrame(
-        occurence_data["lon_lat_list"].tolist(), index=occurence_data.index
-    )
-    occurence_data = occurence_data.drop(columns="lon_lat_list")
 
-    distribution_data = hash_idx_data[["hash_idx", "polygon_wkt"]].explode(
-        "polygon_wkt"
+    # extrakt the wkt from the wkt data
+    wkt_string = (
+        temp_db_con.execute(
+            f"""
+        SELECT * FROM wkt_data
+        WHERE sequence_idx = {sequence_idx}
+        """
+        )
+        .df()["wkt_string"]
+        .item()
     )
-    distribution_data["label"] = "distribution"
-    distribution_data[["lon", "lat"]] = pd.DataFrame(
-        distribution_data["polygon_wkt"].tolist(), index=distribution_data.index
-    )
-    distribution_data = distribution_data.drop(columns="polygon_wkt")
 
-    # concat the map data, assign colors
-    map_data = pd.concat([occurence_data, distribution_data], ignore_index=True)
+    wkt_data = list(wkt.loads(wkt_string).exterior.coords)
+
+    wkt_data = pd.DataFrame(data=wkt_data, columns=["lon", "lat"])
+    wkt_data["label"] = "distribution"
+
+    # concat both frames to get the map data
+    map_data = pd.concat([occurence_data, wkt_data], ignore_index=True)
+    # add a color column
     color_dict = {"occurence": "#800000", "distribution": "#008000"}
     map_data["color"] = map_data["label"].map(color_dict)
 
     return map_data
 
 
-def perform_gbif_validation(read_data_to_modify: object):
-    """Function to perform the GBIF validation for all records.
-
-    Args:
-        read_data_to_modify (object): Path to the HDF read store.
-    """
-    gbif_distribution_data = dd.read_hdf(
-        read_data_to_modify,
-        key="gbif_taxonomy_distribution",
-        chunksize=1,
-        columns=["hash_idx", "gbif_taxonomy", "polygon_wkt"],
-    )
-
-    # display the progress bar on the main page
-    pbar = st.progress(0, text="Validating via GBIF.")
-    nr_of_queries = gbif_distribution_data.npartitions
-
-    results = []
-
-    for i, line in enumerate(gbif_distribution_data.to_delayed()):
-        # compute the values for that line
-        line = line.compute()
-        hash_idx, species, polygon = (
-            line["hash_idx"].item(),
-            line["gbif_taxonomy"].item(),
-            line["polygon_wkt"].item(),
-        )
-        # perform the api call
-        while True:
-            try:
-                validation_result = occ.search(
-                    scientificName=species, geometry=polygon, timeout=60
-                )
-                break
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 429:
-                    time.sleep(1)
-                    continue
-
-        results.append(
-            (hash_idx, "True" if validation_result["count"] > 0 else "False")
-        )
-        progress = int((i + 1) / nr_of_queries * 100)
-        pbar.progress(progress, text=f"Processing {hash_idx}: {species}")
-
-    # transform to dataframe, save to hdf
-    results = pd.DataFrame(results, columns=["hash_idx", "gbif_validation"])
-    results.to_hdf(
-        read_data_to_modify,
-        key="gbif_validation_species",
-        mode="a",
-        format="table",
-    )
-
-    st.success("GBIF validation results successfully saved.")
-
-    # map the results also for the species groups if there are any
-    with pd.HDFStore(read_data_to_modify, mode="r") as store:
-        groups_present = False
-        if "/sequence_group_data" in store.keys():
-            groups_present = True
-
-    # give user output
-    if groups_present:
-        st.warning(
-            "Species groups detected in the dataset. Deriving GBIF validation for species groups.",
-            icon="ℹ️",
-        )
-
-        # derive for sequence groups, load the group mappings first
-        group_mapping_path = read_data_to_modify.parents[2].joinpath(
-            "11_read_table", "data", "group_mapping.csv"
-        )
-
-        # load gbif validation species and groups, add group annotation
-        gbif_validation_species = dd.read_hdf(
-            read_data_to_modify, key="gbif_validation_species"
-        )
-        gbif_validation_species["gbif_validation"] = gbif_validation_species[
-            "gbif_validation"
-        ].astype(bool)
-
-        group_mapping = dd.read_csv(
-            group_mapping_path,
-            sep="\t",
-            names=["hash_idx", "hash", "seq", "group_idx"],
-            usecols=["hash_idx", "group_idx"],
-        )
-
-        # merge the two frames to have the groups in the gbif validation
-        gbif_validation_sequence_groups = gbif_validation_species.merge(
-            group_mapping, left_on="hash_idx", right_on="hash_idx", how="left"
-        )
-
-        gbif_validation_sequence_groups = (
-            gbif_validation_sequence_groups[["group_idx", "gbif_validation"]]
-            .groupby(by="group_idx")["gbif_validation"]
-            .sum()
-            .reset_index()
-        )
-
-        # transform back to boolean, rename column
-        gbif_validation_sequence_groups = gbif_validation_sequence_groups.assign(
-            gbif_validation=gbif_validation_sequence_groups["gbif_validation"] > 0
-        )
-        gbif_validation_sequence_groups["gbif_validation"] = (
-            gbif_validation_sequence_groups["gbif_validation"].map(
-                lambda x: "True" if x else "False", meta=("gbif_validation", "object")
+def validation_api_request(species_name, wkt_string) -> str:
+    # perform the api call
+    while True:
+        try:
+            validation_result = occ.search(
+                scientificName=species_name, geometry=wkt_string, timeout=60
             )
+            break
+        except (
+            requests.exceptions.HTTPError,
+            requests.exceptions.ConnectionError,
+        ) as e:
+            if e.response.status_code == 429:
+                time.sleep(1)
+                continue
+
+    if validation_result["count"] > 0:
+        return "plausible"
+    else:
+        return "implausible"
+
+
+def api_validation(temp_db, temp_folder):
+    # establish the connection
+    temp_db_con = duckdb.connect(temp_db)
+
+    # collect the required data
+    api_data = temp_db_con.execute(
+        f"""
+        SELECT 
+            DISTINCT(wd.sequence_idx),
+            dd.gbif_taxonomy,
+            wd.wkt_string
+        FROM wkt_data AS wd
+        LEFT JOIN distribution_data AS dd
+            ON wd.sequence_idx = dd.sequence_idx
+        """
+    )
+
+    chunk_count = 1
+
+    while True:
+        api_data_chunk = api_data.fetch_df_chunk()
+        if api_data_chunk.empty:
+            break
+        else:
+            # create a filename for the chunk
+            output_name = temp_folder.joinpath(
+                f"gbif_validation_{chunk_count}.parquet.snappy"
+            )
+            chunk_args = zip(
+                api_data_chunk["gbif_taxonomy"], api_data_chunk["wkt_string"]
+            )
+            validation_status = Parallel(n_jobs=-2)(
+                delayed(validation_api_request)(species_name, wkt_string)
+                for species_name, wkt_string in chunk_args
+            )
+            # some user output
+            st.toast(f"Chunk {chunk_count} processed!")
+
+            # save to parquet
+            chunk_output = pd.DataFrame(
+                zip(api_data_chunk["sequence_idx"], validation_status),
+                columns=["sequence_idx", "gbif_validation"],
+            )
+
+            # write to parquet to later ingest into the main database
+            chunk_output.to_parquet(output_name)
+
+            # increase the chunk count
+            chunk_count += 1
+
+    temp_db_con.close()
+
+
+def add_validation_to_metadata(read_data_to_modify, temp_folder):
+    # connect to the main database
+    read_data_to_modify_con = duckdb.connect(read_data_to_modify)
+    # collect the parquet data
+    parquet_files = temp_folder.joinpath("gbif_validation_*.parquet.snappy")
+
+    # create a view over the parquet files
+    read_data_to_modify_con.execute(
+        f"""
+        CREATE OR REPLACE TEMPORARY VIEW validation_parquet AS
+        SELECT * 
+        FROM read_parquet('{parquet_files}')
+        """
+    )
+
+    # check if sequence gbif validation is in the database
+    info = read_data_to_modify_con.execute("PRAGMA table_info(sequence_metadata)").df()
+    info = info["name"].to_list()
+
+    if "gbif_validation" not in info:
+        read_data_to_modify_con.execute(
+            "ALTER TABLE sequence_metadata ADD COLUMN gbif_validation TEXT"
         )
 
-        gbif_validation_sequence_groups = gbif_validation_sequence_groups.rename(
-            columns={"group_idx": "hash_idx"}
+    # add the validation to the sequence metadata
+    read_data_to_modify_con.execute(
+        f"""
+        UPDATE sequence_metadata AS smd
+        SET gbif_validation = vp.gbif_validation
+        FROM validation_parquet AS vp
+        WHERE smd.sequence_idx = vp.sequence_idx
+        """
+    )
+
+    # remove the parquet files
+    for file in temp_folder.glob("gbif_validation_*.parquet.snappy"):
+        if file.is_file():
+            file.unlink()
+
+    # infer gbif validation for groups from sequence metadata
+    # create a view with joined in gbif validation
+    read_data_to_modify_con.execute(
+        f"""
+        CREATE OR REPLACE TEMPORARY VIEW group_validation_temp AS
+        (
+            SELECT 
+                gm.*,
+                smd.gbif_validation
+            FROM group_mapping AS gm
+            LEFT JOIN sequence_metadata AS smd
+                ON gm.sequence_idx = CAST(smd.sequence_idx AS HUGEINT)
+            WHERE smd.gbif_validation IS NOT NULL
+        )
+        """
+    )
+
+    # group by group idx, cast plausible on output if any is plausible
+    read_data_to_modify_con.execute(
+        f"""
+        CREATE OR REPLACE TEMPORARY VIEW group_validation AS
+        SELECT
+            group_idx,
+            CASE
+                WHEN BOOL_OR(gbif_validation = 'plausible') THEN 'plausible'
+                ELSE 'implausible'
+            END AS gbif_validation
+        FROM group_validation_temp
+        GROUP BY group_idx
+        """
+    )
+
+    # add a new column to the group_metadata column and fill it with the gbif_validation
+    # check if sequence gbif validation is in the database
+    info = read_data_to_modify_con.execute("PRAGMA table_info(group_metadata)").df()
+    info = info["name"].to_list()
+
+    if "gbif_validation" not in info:
+        read_data_to_modify_con.execute(
+            "ALTER TABLE group_metadata ADD COLUMN gbif_validation TEXT"
         )
 
-        gbif_validation_sequence_groups.to_hdf(
-            read_data_to_modify,
-            key="gbif_validation_species_groups",
-            mode="a",
-            format="table",
-        )
+    # add the validation to the group metadata
+    read_data_to_modify_con.execute(
+        f"""
+        UPDATE group_metadata AS gmd
+        SET gbif_validation = gv.gbif_validation
+        FROM group_validation AS gv
+        WHERE gmd.sequence_idx = gv.group_idx
+        """
+    )
 
-        st.success("GBIF validation results for species groups successfully saved.")
+    # close the connection
+    read_data_to_modify_con.close()
+
+
+def gbif_validation_performed(read_data_to_modify: str) -> bool:
+    # connect to database
+    read_data_to_modify_con = duckdb.connect(read_data_to_modify)
+
+    # get the table info
+    info = read_data_to_modify_con.execute("PRAGMA table_info(sequence_metadata)").df()
+    info = info["name"].to_list()
+
+    read_data_to_modify_con.close()
+
+    if "gbif_validation" in info:
+        return True
+    else:
+        return False
+
+
+def validation_preview(read_data_to_modify: str, n_rows: int) -> pd.DataFrame:
+    # establish the connection
+    read_data_to_modify_con = duckdb.connect(read_data_to_modify, read_only=True)
+
+    # get the first n rows
+    preview = read_data_to_modify_con.execute(
+        f"""
+        SELECT 
+            sequence_idx,
+            gbif_taxonomy,
+            gbif_validation
+        FROM sequence_metadata
+        WHERE gbif_taxonomy IS NOT NULL
+        LIMIT {n_rows}
+        """
+    ).df()
+
+    read_data_to_modify_con.close()
+
+    return preview
+
+
+def reset_validation(read_data_to_modify: str) -> None:
+    # establish the connection
+    read_data_to_modify_con = duckdb.connect(read_data_to_modify)
+
+    read_data_to_modify_con.execute(
+        "ALTER TABLE sequence_metadata DROP COLUMN gbif_validation"
+    )
+
+    read_data_to_modify_con.close()
 
 
 def main():
@@ -400,48 +507,66 @@ def main():
         unsafe_allow_html=True,
     )
 
+    # define the temp folder to look for intermediate saves
+    temp_folder = st.session_state["read_data_to_modify"].parent.parent.joinpath("temp")
+    temp_db = Path(temp_folder).joinpath("temp.duckdb")
+
     # header
     st.title("Validate species names via GBIF record search")
     st.write("This module needs sample metadata (lat, lon) for each sample.")
     st.write("This module needs harmonized GBIF taxonomy.")
 
-    # look for metadata, look for harmonized species names
-    return_dict = check_metadata(st.session_state["read_data_to_modify"])
+    # check for the required data
+    sequence_metadata, sample_metadata, gbif_taxonomy = check_metadata(
+        st.session_state["read_data_to_modify"]
+    )
 
-    # give user feedback
-    if not return_dict["sample_metadata"]:
+    if not sequence_metadata:
+        st.write("**Please add sequence metadata first.**")
+    if not sample_metadata:
         st.write("**Please add sample metadata first.**")
-    if not return_dict["gbif_taxonomy"]:
-        st.write("**Please add gbif taxonomy first.**")
+    if not gbif_taxonomy:
+        st.write("**Please harmonize taxonomy via GBIF.**")
 
-    if return_dict["sample_metadata"] and return_dict["gbif_taxonomy"]:
-        # extract column names from sample metadata
-        col_names = sample_metadata_columns(st.session_state["read_data_to_modify"])
+    # check if wkt is calculated
+    wkt_computed = wkt_calculated(temp_db)
 
-        # selectboxes for lattitude and longitude
-        latitude, longitude = st.columns(2)
-        with latitude:
-            lat = st.selectbox(
+    # check if the GBIF validation has been performed
+    gbif_validated = gbif_validation_performed(st.session_state["read_data_to_modify"])
+
+    # if all are true display a selector for lat lon
+    if (
+        sequence_metadata
+        and sample_metadata
+        and gbif_taxonomy
+        and not wkt_computed
+        and not gbif_validated
+    ):
+        sample_meta_cols = collect_sample_metadata_cols(
+            st.session_state["read_data_to_modify"]
+        )
+
+        # display two columns
+        lat, lon = st.columns(2)
+        with lat:
+            latitude = st.selectbox(
                 label="Latitude",
-                options=col_names,
-                help="Please select latitude column",
+                options=sample_meta_cols,
+                help="Please select the latitude column.",
             )
-        with longitude:
-            lon = st.selectbox(
+        with lon:
+            longitude = st.selectbox(
                 label="Longitude",
-                options=col_names,
-                help="Please select longitude column",
+                options=sample_meta_cols,
+                help="Please select the longitude column.",
             )
 
-        # display file preview
         st.header("File preview")
-        try:
-            preview = file_preview(
-                st.session_state["read_data_to_modify"], lat_col=lat, lon_col=lon
+        st.write(
+            generate_file_preview(
+                st.session_state["read_data_to_modify"], latitude, longitude
             )
-            st.write(preview)
-        except ValueError:
-            st.write("Please select to distinct columns")
+        )
 
         # slider for the radius around sample points (growth of the polygon)
         radius = st.slider(
@@ -453,55 +578,76 @@ def main():
         )
 
         compute_distributions = st.button(
-            label="Compute / Update species distributions", type="primary"
+            label="Compute species distributions", type="primary"
         )
 
         if compute_distributions:
-            with st.spinner("Computing species distributions. Hang on."):
+            with st.spinner("Computing species distributions", show_time=True):
                 compute_species_distributions(
-                    st.session_state["read_data_to_modify"], lat, lon, radius
+                    st.session_state["read_data_to_modify"], latitude, longitude, radius
                 )
-            st.success("Distributions have been computed and saved!")
+                # rerun to update the interface
+                st.rerun()
 
-        st.divider()
-        # if gbif taxonomy distribution in keys, display this
-        with pd.HDFStore(st.session_state["read_data_to_modify"]) as hdf_store:
-            keys = hdf_store.keys()
+    # if the wkt strings are already computed, display the map
+    if wkt_computed and not gbif_validated:
+        st.write("Species distribution data detected!")
 
-        if "/gbif_taxonomy_distribution" in keys:
-            gbif_taxonomy_distribution = dd.read_hdf(
-                st.session_state["read_data_to_modify"],
-                key="gbif_taxonomy_distribution",
-                columns=["hash_idx", "radius", "gbif_taxonomy", "hash", "seq"],
-            )
+        # generate a preview
+        preview, idx_selection = generate_map_preview_table(temp_db)
+        st.write(preview)
+        # select an idx to plot on map
+        idx_to_plt = st.selectbox(
+            label="Select any hash idx to plot on the map",
+            options=idx_selection,
+        )
 
-            species_list = gbif_taxonomy_distribution.compute()
-            st.write("Detected data:")
-            st.write(species_list)
-
-            idx_to_plt = st.selectbox(
-                label="Select any hash idx to plot on the map",
-                options=species_list["hash_idx"],
-            )
-
-            # load the map data
-            map_data = extract_map_data(
-                st.session_state["read_data_to_modify"], hash_idx=idx_to_plt
-            )
+        if idx_to_plt:
+            map_data = select_map_data(temp_db, idx_to_plt)
 
             if not map_data.empty:
                 st.map(map_data, latitude="lat", longitude="lon", color="color")
 
-            # perform the GBIF validation
-            perform_validation = st.button(
-                "Validate all species via GBIF API",
-                type="primary",
-                help="This function checks if there are any observations for the given species list within the selected radius. May take some time.",
-            )
+        # option to reset the species distribution data
+        compute = st.button(label="Validate species via GBIF API", type="primary")
+        reset = st.button(label="Reset species distributions", type="secondary")
 
-            if perform_validation:
-                # function to perform the validation. Adds validation data to the read store
-                perform_gbif_validation(st.session_state["read_data_to_modify"])
+        # reset wkt data
+        if reset:
+            temp_db.unlink()
+            st.rerun()
+
+        # perform the GBIF validation algorithm
+        if compute:
+            with st.spinner("Querying GBIF API. Hold on.", show_time=True):
+                api_validation(temp_db, temp_folder)
+
+            # ingest the data into the sequence metadata
+            add_validation_to_metadata(
+                st.session_state["read_data_to_modify"], temp_folder
+            )
+            # remove temp db and tempfolder
+            temp_db.unlink()
+            temp_folder.rmdir()
+            st.rerun()
+
+    # if validated data exists
+    if gbif_validated:
+        st.write("GBIF validation has already been performed.")
+        # display preview rows
+        preview_rows = st.number_input("Rows to display in preview", min_value=5)
+        # display the preview
+        st.write(
+            validation_preview(
+                st.session_state["read_data_to_modify"], n_rows=preview_rows
+            )
+        )
+
+        reset_vali = st.button("Reset GBIF validation", type="primary")
+
+        if reset_vali:
+            reset_validation(st.session_state["read_data_to_modify"])
+            st.rerun()
 
 
 main()

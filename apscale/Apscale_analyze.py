@@ -1,30 +1,110 @@
 import streamlit as st
-import apscale, subprocess, sys, shutil
+import duckdb, sys, shutil, time
 from pathlib import Path
 import pandas as pd
 
 
-def initialize_read_storage(read_data_storage_path: str, project: str) -> None:
-    """Functin to initialize the read storage for the analyze module.
-    If it already has been initialized, nothing happens, otherwise the read storage
+def initialize_read_store(read_data_store_path, project):
+    """Functin to initialize the read store for the analyze module.
+    If it already has been initialized, nothing happens, otherwise the read store
     from step 11 will be copied here.
 
     Args:
-        read_data_storage_path (str): Path to the read storage
+        read_data_store_path (str): Path to the read store
         project (str): Path to the project we are working in
     """
-    # check if the file exists already
-    read_data_storage_name = read_data_storage_path.name
-    read_data_to_modify = project.joinpath("12_analyze", "data", read_data_storage_name)
+    read_data_store_name = read_data_store_path.name
+    read_data_to_modify = project.joinpath("12_analyze", "data", read_data_store_name)
 
     # add the read_data_to_modify to the session state
     if "read_data_to_modify" not in st.session_state:
         st.session_state["read_data_to_modify"] = read_data_to_modify
-
     if read_data_to_modify.is_file():
         pass
     else:
-        shutil.copyfile(read_data_storage_path, read_data_to_modify)
+        shutil.copyfile(read_data_store_path, read_data_to_modify)
+
+
+def get_basic_stats(read_data_to_modify: str) -> tuple:
+    """Function to collect basic stats from an apscale project.
+
+    Args:
+        read_data_to_modify (str): The read store to look into.
+
+    Returns:
+        tuple: Returns a tuple of nr_of_samples, nr_of_sequences, nr_of_sequence_groups
+    """
+    # establish the connection
+    read_data_store = duckdb.connect(read_data_to_modify)
+
+    # collect the number of samples and sequences
+    nr_of_samples = read_data_store.execute(
+        "SELECT COUNT(*) FROM sample_data"
+    ).fetchone()[0]
+
+    nr_of_sequences = (
+        read_data_store.execute("SELECT COUNT(*) FROM sequence_data").fetchone()[0] - 1
+    )
+    nr_of_groups = read_data_store.execute(
+        "SELECT COUNT(*) FROM group_data"
+    ).fetchone()[0]
+
+    read_data_store.close()
+
+    return nr_of_samples, nr_of_sequences, nr_of_groups
+
+
+def get_metadata_info(read_data_to_modify: str) -> tuple:
+    """Function to get metadata info from the read store.
+
+    Args:
+        read_data_to_modify (str): Read store to work with.
+
+    Returns:
+        tuple: sample metadata columns, sequence metadata columns
+    """
+    # connect to the duckdb database
+    read_data_store = duckdb.connect(read_data_to_modify)
+
+    (
+        sample_metadata_cols,
+        sequence_metadata_cols,
+        perf_gbif_taxonomy,
+        perf_gbif_validation,
+    ) = (0, 0, "not performed", "not performed")
+
+    # try to collect the sample metadata
+    try:
+        sample_metadata = read_data_store.execute(
+            "SELECT * FROM sample_metadata LIMIT 1"
+        ).df()
+        sample_metadata_cols = len(sample_metadata.columns) - 2
+    except duckdb.CatalogException:
+        pass
+
+    # try to collect the sequence metadata
+    try:
+        sequence_metadata = read_data_store.execute(
+            "SELECT * FROM sequence_metadata LIMIT 1"
+        ).df()
+        sequence_metadata_cols = len(sequence_metadata.columns) - 5
+
+        # check if one of the gbif validation modules has been run already
+        if "gbif_taxonomy" in sequence_metadata.columns:
+            perf_gbif_taxonomy = "performed"
+        if "gbif_validation" in sequence_metadata.columns:
+            perf_gbif_validation = "performed"
+    except duckdb.CatalogException:
+        pass
+
+    read_data_store.close()
+
+    return (
+        sample_metadata_cols,
+        sequence_metadata_cols,
+        perf_gbif_taxonomy,
+        perf_gbif_validation,
+    )
 
 
 def reset_metadata(read_data_storage_path, read_data_to_modify, project):
@@ -35,35 +115,6 @@ def reset_metadata(read_data_storage_path, read_data_to_modify, project):
         read_data_to_modify (_type_): Path to the new read store to generate.
     """
     shutil.copyfile(read_data_storage_path, read_data_to_modify)
-
-    # remove all old parquet files from the data folder
-    data_folder = Path(project).joinpath("12_analyze", "data")
-    files = data_folder.glob("*.parquet.snappy")
-
-    for file in files:
-        file.unlink()
-
-
-def collect_metadata_columns(read_data_to_modify: str) -> tuple:
-    """Function to collect the number of columns from the metadata tables.
-
-    Args:
-        read_data_to_modify (str): Path to the read data storage with added metadata
-
-    Returns:
-        tuple: Number of sample metadata columns, number of sequence metadata columns
-    """
-    sample_cols, sequence_cols = 0, 0
-
-    with pd.HDFStore(read_data_to_modify, mode="r") as store:
-        if "/sample_metadata" in store.keys():
-            sample_cols = len(store.get_storer("sample_metadata").table.colnames) - 2
-        if "/sequence_metadata" in store.keys():
-            sequence_cols = (
-                len(store.get_storer("sequence_metadata").table.colnames) - 3
-            )
-
-    return sample_cols, sequence_cols
 
 
 def main(project=Path.cwd()):
@@ -81,37 +132,30 @@ def main(project=Path.cwd()):
     # show the current project
     st.write(f"Current project: **{project.name}**")
 
-    # calculate the number of samples and sequences in the project
+    # get the duckdb database path
     project_name = "_".join(project.name.split("_")[:-1])
-    read_data_storage_path = project.joinpath(
-        "11_read_table", "data", f"read_data_storage_{project_name}.h5.lz"
+    read_data_store_path = project.joinpath(
+        "11_read_table", "data", f"{project_name}_read_data_storage.duckdb"
     )
 
     # add the read data storage path to the session state
     if "read_data_storage_path" not in st.session_state:
-        st.session_state["read_data_storage_path"] = read_data_storage_path
-    # collect number of sequences and number of samples
-    with pd.HDFStore(read_data_storage_path, mode="r") as store:
-        number_of_sequences = store.get_storer("sequence_data").nrows
-        number_of_samples = store.get_storer("sample_data").nrows
-        # also collect the number of sequence groups if there are any
-        try:
-            number_of_sequence_groups = store.get_storer("sequence_group_data").nrows
-        except KeyError:
-            number_of_sequence_groups = 0
+        st.session_state["read_data_store_path"] = read_data_store_path
 
-    # if the data storage is not already in the 12_analyze folder, put a copy there
-    initialize_read_storage(read_data_storage_path, project)
+    # initialize (copy) the read store to the analysis module, to have a file to play with.
+    initialize_read_store(read_data_store_path, project)
 
-    st.write(
-        f"This project contains **{number_of_sequences - 1}** sequences and **{number_of_samples}** samples."
-    )
-    st.write(
-        f"This project contains **{number_of_sequence_groups - 1}** sequence groups."
+    # initialize the duckdb connection to gather basic stats
+    nr_of_samples, nr_of_sequences, nr_of_groups = get_basic_stats(
+        st.session_state["read_data_to_modify"]
     )
 
     st.write(
-        "This module can be used to **add metadata** to your read storage and **export read tables**."
+        f"This project contains **{nr_of_samples}** samples, **{nr_of_sequences}** sequences and **{nr_of_groups}** sequence groups."
+    )
+
+    st.write(
+        "This module can be used to **add metadata** to your read store and **export read tables**."
     )
 
     st.write(
@@ -121,32 +165,23 @@ def main(project=Path.cwd()):
     # add a divier to display metadata stats
     st.divider()
 
-    # try to collect the number of sample metadata columns and sequence metadata columns
-    sample_metadata_cols, sequence_metadata_cols = collect_metadata_columns(
-        st.session_state["read_data_to_modify"]
-    )
+    (
+        sample_metadata_cols,
+        sequence_metadata_cols,
+        perf_gbif_taxonomy,
+        perf_gbif_validation,
+    ) = get_metadata_info(st.session_state["read_data_to_modify"])
 
     st.write(
-        f"This project currently contains **{sample_metadata_cols} sample metadata columns** and **{sequence_metadata_cols} sequence metadata columns**."
+        f"This project currently contains **{sample_metadata_cols} sample metadata fields** and **{sequence_metadata_cols} sequence metadata fields**."
     )
 
-    # add optional data (GBIF species names, GBIF validation)
-    with pd.HDFStore(st.session_state["read_data_to_modify"], mode="r") as store:
-        keys = {
-            "/gbif_taxonomy": "not performed",
-            "/gbif_validation_species": "not performed",
-            "/gbif_validation_species_groups": "not performed",
-        }
+    message = f"""
+        GBIF taxonomy module was **{perf_gbif_taxonomy}**.  
+        GBIF validation was **{perf_gbif_validation}**.  
+        """
 
-        for key in keys.keys():
-            if key in store.keys():
-                keys[key] = "performed"
-
-        message = f"""GBIF taxonomy module **was {keys["/gbif_taxonomy"]}**.  
-        GBIF validation for species **was {keys["/gbif_validation_species"]}**.  
-        GBIF validation for species groups **was {keys["/gbif_validation_species_groups"]}**."""
-
-        st.write(message)
+    st.write(message)
 
     # add a divier to reset all metadata
     st.divider()
@@ -160,11 +195,12 @@ def main(project=Path.cwd()):
 
     if data_reset:
         reset_metadata(
-            st.session_state["read_data_storage_path"],
+            st.session_state["read_data_store_path"],
             st.session_state["read_data_to_modify"],
             project,
         )
         st.info("Metadata has been reset", icon="ℹ️")
+        time.sleep(1)
         st.rerun()
 
 

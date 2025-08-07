@@ -59,10 +59,10 @@ def get_power_law_cutoff(file_path: str) -> tuple:
     abundances = []
 
     for header, _ in file:
-        size = header.split("size=")[-1]
+        size = header.split("size=")[-1].rstrip(";")
         abundances.append(size)
 
-    # check if a large proportion > 25% of data points are singletons and doubletons -> only fit power law then, else return "normal" threshold of 4
+    # check if a large proportion > 25% of data points are singletons and doubletons -> only fit power law then, else return default threshold of 4
     seq_counts = Counter(abundances)
 
     try:
@@ -89,6 +89,8 @@ def get_power_law_cutoff(file_path: str) -> tuple:
                     return file_path, 4
         else:
             return file_path, 4
+    else:
+        return file_path, 4
 
 
 ## denoising function to denoise all sequences the input fasta with a given alpha and minsize
