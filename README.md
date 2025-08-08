@@ -98,7 +98,7 @@ and it should return the version number, for example:
 
 ## How to use
 
-Before creating an issue, please check if the answer to your question can be found in the [manual](https://github.com/DominikBuchner/apscale/blob/main/manual/apscale_manual.pdf)
+Before creating an issue, please check if the answer to your question can be found in the [manual](https://github.com/DominikBuchner/apscale/blob/main/manual/apscale_manual.pdf).
 
 ### Create a new apscale project
 
