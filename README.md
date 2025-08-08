@@ -47,16 +47,6 @@ Check the vsearch Github page for further info:
 https://github.com/torognes/vsearch
 https://github.com/torognes/swarm
 
-Support for compressed files with zlib is necessary. For Unix based systems this is shipped with
-vsearch, for Windows the zlib.dll can be downloaded via:
-
-[zlib for Windows](https://sourceforge.net/projects/mingw-w64/files/External%20binary%20packages%20%28Win64%20hosted%29/Binaries%20%2864-bit%29/zlib-1.2.5-bin-x64.zip/download)
-
-The dll has to be in the same folder as the vsearch executable. If you need help with adding a folder to PATH in windows
-please take a look at the first answer on this stackoverflow issue:
-
-[How to add a folder to PATH Windows](https://stackoverflow.com/questions/44272416/how-to-add-a-folder-to-path-environment-variable-in-windows-10-with-screensho)
-
 To check if everything is correctly set up please type this into your command line:
 
 `vsearch --version`
@@ -135,6 +125,7 @@ C:\USERS\DOMINIK\DESKTOP\EXAMPLE_PROJECT
 ├───10_nc_removal
 │   └───data
 ├───11_read_table
+│   └───data
 ├───12_analyze
     └───data
 </pre>
