@@ -738,7 +738,7 @@ def main():
         # create an export folder with a timestamp
         data_folder = st.session_state["read_data_to_modify"].parent
         export_folder = (
-            f"export_{datetime.datetime.now().strftime('%d-%m-%Y_%G-%M-%S')}"
+            f"export_{datetime.datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}"
         )
         export_path = Path(data_folder.joinpath(export_folder))
         export_path.mkdir()

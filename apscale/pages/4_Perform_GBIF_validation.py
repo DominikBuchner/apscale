@@ -598,7 +598,7 @@ def main():
         st.write(preview)
         # select an idx to plot on map
         idx_to_plt = st.selectbox(
-            label="Select any hash idx to plot on the map",
+            label="Select any sequence idx to plot on the map",
             options=idx_selection,
         )
 
