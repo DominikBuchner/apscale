@@ -295,7 +295,7 @@ def prepare_export_data(
         read_data_to_modify_con.execute(
             f"""
         CREATE OR REPLACE TABLE temp_db.sample_data AS
-            SELECT * FROM main.sample_metadata
+            SELECT * FROM main.sample_data
         """
         )
 
@@ -677,6 +677,9 @@ def main():
     seq_meta_available, sample_meta_available = metadata_available(
         st.session_state["read_data_to_modify"]
     )
+
+    # initialize sample and sequence filters
+    sample_filters, sequence_filters, sample_data_splits = {}, {}, []
 
     # sequence filtering
     st.header("Select filters for sequence metadata")

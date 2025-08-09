@@ -16,6 +16,9 @@ def initialize_read_store(read_data_store_path, project):
     read_data_store_name = read_data_store_path.name
     read_data_to_modify = project.joinpath("12_analyze", "data", read_data_store_name)
 
+    # create the path if it is not there (some programs do not copy empty folders)
+    project.joinpath("12_analyze", "data").mkdir(parents=True, exist_ok=True)
+
     # add the read_data_to_modify to the session state
     if "read_data_to_modify" not in st.session_state:
         st.session_state["read_data_to_modify"] = read_data_to_modify
