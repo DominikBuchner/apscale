@@ -73,7 +73,12 @@ def build_read_store(input_folder, database_path):
     read_data_store.execute(
         f"""
         CREATE TABLE temp_db.sequence_read_count_data AS
-        SELECT * FROM read_parquet('{parquet_path}')
+        SELECT
+            CAST(sample AS VARCHAR) AS sample,
+            CAST(hash AS VARCHAR) AS hash,
+            CAST(sequence AS VARCHAR) AS sequence,
+            read_count
+        FROM read_parquet('{parquet_path}')
         """
     )
 
@@ -593,8 +598,20 @@ def generate_sequence_groups(
                         first = False
                         # add this to the groups found table since it is by definition the first group found
                         grouping_connection.execute(
-                            "CREATE OR REPLACE TABLE temp_db.groups_found AS SELECT * FROM all_hash_matches"
+                            f"""
+                            CREATE OR REPLACE TABLE temp_db.groups_found AS
+                            SELECT
+                                CAST(query AS VARCHAR) AS query,
+                                CAST(target AS VARCHAR) AS target,
+                                pct_id,
+                                query_idx,
+                                query_order,
+                                target_idx,
+                                target_order
+                            FROM all_hash_matches
+                            """
                         )
+
                         mapping_csv.write(f"{sequence_idx}\t{sequence_idx}\n")
                         sequence_counter += 1
                         pbar.update(1)
