@@ -183,8 +183,8 @@ def main(project=Path.cwd()):
             columns=[
                 "output file",
                 "finished at",
-                "sequences with substraction",
                 "total substracted reads",
+                "sequences with substraction",
             ],
         )
         log_df = log_df.sort_values(by=["output file"])
