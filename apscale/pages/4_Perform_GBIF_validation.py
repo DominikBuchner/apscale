@@ -1,4 +1,4 @@
-import duckdb, pyproj, time, requests
+import duckdb, pyproj, time, requests, random
 import pandas as pd
 import pathlib
 from joblib import Parallel, delayed
@@ -9,6 +9,7 @@ from shapely.ops import transform
 from shapely.geometry.polygon import orient
 from shapely import wkt
 from pygbif import occurrences as occ
+from pygbif.gbifutils import NoResultException
 
 
 def check_metadata(read_data_to_modify):
@@ -150,7 +151,7 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
 
     # loop over in chunks
     while True:
-        data_chunk = distinct_sequences.fetch_df_chunk(1)
+        data_chunk = distinct_sequences.fetch_df_chunk()
         if data_chunk.empty:
             break
         else:
@@ -277,25 +278,31 @@ def select_map_data(temp_db, sequence_idx) -> pd.DataFrame:
 
 
 def validation_api_request(species_name, wkt_string) -> str:
+    # define a backoff factor for each individual request
+    backoff = 1.0
     # perform the api call
     while True:
         try:
             validation_result = occ.search(
-                scientificName=species_name, geometry=wkt_string, timeout=60
+                scientificName=species_name, geometry=wkt_string, limit=1, timeout=60
             )
-            break
+            print(validation_result)
+            return (
+                "plausible" if validation_result.get("count", 0) > 0 else "implausible"
+            )
         except (
             requests.exceptions.HTTPError,
             requests.exceptions.ConnectionError,
         ) as e:
             if e.response.status_code == 429:
-                time.sleep(1)
-                continue
+                wait = backoff + random.uniform(0, 1)
+                time.sleep(wait)
+                backoff *= 2
 
-    if validation_result["count"] > 0:
-        return "plausible"
-    else:
-        return "implausible"
+        except NoResultException:
+            wait = backoff + random.uniform(0, 1)
+            time.sleep(wait)
+            backoff *= 2
 
 
 def api_validation(temp_db, temp_folder):
@@ -329,7 +336,7 @@ def api_validation(temp_db, temp_folder):
             chunk_args = zip(
                 api_data_chunk["gbif_taxonomy"], api_data_chunk["wkt_string"]
             )
-            validation_status = Parallel(n_jobs=-2)(
+            validation_status = Parallel(n_jobs=1)(
                 delayed(validation_api_request)(species_name, wkt_string)
                 for species_name, wkt_string in chunk_args
             )
