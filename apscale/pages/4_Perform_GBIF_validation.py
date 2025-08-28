@@ -286,7 +286,6 @@ def validation_api_request(species_name, wkt_string) -> str:
             validation_result = occ.search(
                 scientificName=species_name, geometry=wkt_string, limit=1, timeout=60
             )
-            print(validation_result)
             return (
                 "plausible" if validation_result.get("count", 0) > 0 else "implausible"
             )
