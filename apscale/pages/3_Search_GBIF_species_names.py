@@ -69,12 +69,16 @@ def api_request(species_name: str) -> str:
     api_response = species.name_backbone(species_name, timeout=60)
 
     # try to fetch the new name, else return a NULL value
-    try:
-        species_name = api_response["species"]
-    except KeyError:
-        species_name = pd.NA
+    # keep repeating until all data is fetched
+    while True:
+        try:
+            species_name, key = api_response["species"], api_response["usageKey"]
+            break
+        except KeyError:
+            species_name, key = pd.NA, pd.NA
+            break
 
-    return species_name
+    return species_name, key
 
 
 def query_gbif(read_data_to_modify: str, species_column: str):
@@ -101,7 +105,7 @@ def query_gbif(read_data_to_modify: str, species_column: str):
     # loop over the data in chunks, unknown how large this may grow
     while True:
         # fetch a chunk
-        chunk = read_data_to_modify.fetch_df_chunk(100)
+        chunk = read_data_to_modify.fetch_df_chunk()
         if chunk.empty:
             break
         else:
@@ -111,13 +115,14 @@ def query_gbif(read_data_to_modify: str, species_column: str):
             )
             # execute the API here and save the result to parquet
             species_names = chunk[species_column].to_list()
-            corrected_names = Parallel(n_jobs=-2)(
+            api_data = Parallel(n_jobs=-2)(
                 delayed(api_request)(name) for name in species_names
             )
+            corrected_names, taxon_keys = zip(*api_data)
             # create an output dataframe
             chunk_df = pd.DataFrame(
-                data=zip(species_names, corrected_names),
-                columns=[species_column, "gbif_taxonomy"],
+                data=zip(species_names, corrected_names, taxon_keys),
+                columns=[species_column, "gbif_taxonomy", "gbif_taxon_key"],
             )
             # save to intermediate parquet untill all chunks are finished
             chunk_df.to_parquet(output_name)
@@ -135,52 +140,58 @@ def query_gbif(read_data_to_modify: str, species_column: str):
         """
     )
 
-    # drop a potential existing column
-    try:
-        read_data_to_modify.execute(
-            "ALTER TABLE sequence_metadata DROP COLUMN gbif_taxonomy"
-        )
-        # add a fresh column
-        read_data_to_modify.execute(
-            "ALTER TABLE sequence_metadata ADD COLUMN gbif_taxonomy TEXT"
-        )
-    except duckdb.BinderException:
-        # add a fresh column
-        read_data_to_modify.execute(
-            "ALTER TABLE sequence_metadata ADD COLUMN gbif_taxonomy TEXT"
-        )
+    # drop potential existing column
+    for col in ["gbif_taxonomy", "gbif_usage_key"]:
+        try:
+            read_data_to_modify.execute(
+                f"ALTER TABLE sequence_metadata DROP COLUMN {col}"
+            )
+        except duckdb.BinderException:
+            pass
+
+    # add the new columns
+    read_data_to_modify.execute(
+        "ALTER TABLE sequence_metadata ADD COLUMN gbif_taxonomy TEXT"
+    )
+    read_data_to_modify.execute(
+        "ALTER TABLE sequence_metadata ADD COLUMN gbif_usage_key BIGINT"
+    )
 
     # add to the sequence metadata
     read_data_to_modify.execute(
         f"""
     UPDATE sequence_metadata AS smd
-    SET gbif_taxonomy = gtp.gbif_taxonomy
+    SET 
+        gbif_taxonomy = gtp.gbif_taxonomy,
+        gbif_usage_key = gtp.gbif_taxon_key
     FROM gbif_tax_parquet AS gtp
     WHERE smd."{species_column}" = gtp."{species_column}"
     """
     )
 
     # also add to the group metadata
-    # drop a potential existing column
-    try:
-        read_data_to_modify.execute(
-            "ALTER TABLE group_metadata DROP COLUMN gbif_taxonomy"
-        )
-        # add a fresh column
-        read_data_to_modify.execute(
-            "ALTER TABLE group_metadata ADD COLUMN gbif_taxonomy TEXT"
-        )
-    except duckdb.BinderException:
-        # add a fresh column
-        read_data_to_modify.execute(
-            "ALTER TABLE group_metadata ADD COLUMN gbif_taxonomy TEXT"
-        )
+    # drop potential existing column
+    for col in ["gbif_taxonomy", "gbif_usage_key"]:
+        try:
+            read_data_to_modify.execute(f"ALTER TABLE group_metadata DROP COLUMN {col}")
+        except duckdb.BinderException:
+            pass
+
+    # add the new columns
+    read_data_to_modify.execute(
+        "ALTER TABLE group_metadata ADD COLUMN gbif_taxonomy TEXT"
+    )
+    read_data_to_modify.execute(
+        "ALTER TABLE group_metadata ADD COLUMN gbif_usage_key BIGINT"
+    )
 
     # add to the sequence metadata
     read_data_to_modify.execute(
         f"""
     UPDATE group_metadata AS gmd
-    SET gbif_taxonomy = gtp.gbif_taxonomy
+    SET 
+        gbif_taxonomy = gtp.gbif_taxonomy,
+        gbif_usage_key = gtp.gbif_taxon_key
     FROM gbif_tax_parquet AS gtp
     WHERE gmd."{species_column}" = gtp."{species_column}"
     """

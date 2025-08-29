@@ -126,6 +126,7 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
             srcd.sample_idx, 
             smd.sequence_order,
             smd.gbif_taxonomy,
+            smd.gbif_usage_key,
             samd."{lat_col}" AS lat,
             samd."{lon_col}" AS lon, 
         FROM main.sequence_read_count_data srcd
@@ -222,6 +223,7 @@ def generate_map_preview_table(temp_db) -> pd.DataFrame:
         SELECT 
             DISTINCT(wkt.sequence_idx),
             dd.gbif_taxonomy,
+            dd.gbif_usage_key,
             wkt.radius
         FROM wkt_data AS wkt
         LEFT JOIN distribution_data AS dd
@@ -277,15 +279,16 @@ def select_map_data(temp_db, sequence_idx) -> pd.DataFrame:
     return map_data
 
 
-def validation_api_request(species_name, wkt_string) -> str:
+def validation_api_request(species_key, wkt_string) -> str:
     # define a backoff factor for each individual request
     backoff = 1.0
     # perform the api call
     while True:
         try:
             validation_result = occ.search(
-                scientificName=species_name, geometry=wkt_string, limit=1, timeout=60
+                taxonKey=species_key, geometry=wkt_string, limit=0, timeout=60
             )
+            print(f"{species_key}: sucess!")
             return (
                 "plausible" if validation_result.get("count", 0) > 0 else "implausible"
             )
@@ -294,13 +297,12 @@ def validation_api_request(species_name, wkt_string) -> str:
             requests.exceptions.ConnectionError,
         ) as e:
             if e.response.status_code == 429:
-                wait = backoff + random.uniform(0, 1)
-                time.sleep(wait)
-                backoff *= 2
+                print(f"{species_key}: HTTP Exception!")
+                time.sleep(random.uniform(0, 3))
 
         except NoResultException:
-            wait = backoff + random.uniform(0, 1)
-            time.sleep(wait)
+            print(f"{species_key}: No Result Exception!")
+            time.sleep(random.uniform(0, 3))
             backoff *= 2
 
 
@@ -314,6 +316,7 @@ def api_validation(temp_db, temp_folder):
         SELECT 
             DISTINCT(wd.sequence_idx),
             dd.gbif_taxonomy,
+            dd.gbif_usage_key,
             wd.wkt_string
         FROM wkt_data AS wd
         LEFT JOIN distribution_data AS dd
@@ -333,11 +336,11 @@ def api_validation(temp_db, temp_folder):
                 f"gbif_validation_{chunk_count}.parquet.snappy"
             )
             chunk_args = zip(
-                api_data_chunk["gbif_taxonomy"], api_data_chunk["wkt_string"]
+                api_data_chunk["gbif_usage_key"], api_data_chunk["wkt_string"]
             )
-            validation_status = Parallel(n_jobs=1)(
-                delayed(validation_api_request)(species_name, wkt_string)
-                for species_name, wkt_string in chunk_args
+            validation_status = Parallel(n_jobs=-2)(
+                delayed(validation_api_request)(gbif_usage_key, wkt_string)
+                for gbif_usage_key, wkt_string in chunk_args
             )
             # some user output
             st.toast(f"Chunk {chunk_count} processed!")
