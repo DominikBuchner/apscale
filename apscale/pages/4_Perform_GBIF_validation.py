@@ -567,9 +567,9 @@ def download_gbif_data(download_key, temp_folder):
         CREATE OR REPLACE TABLE 
             occ_data 
         AS SELECT 
-            species
-            decimallatitude AS lat
-            decimallongitude AS lon
+            species,
+            decimallatitude AS lat,
+            decimallongitude AS lon,
             taxonkey
         FROM read_parquet('{temp_folder.joinpath("occurrence.parquet", ("*"))}')
         """
