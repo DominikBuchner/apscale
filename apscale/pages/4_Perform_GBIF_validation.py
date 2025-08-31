@@ -1,7 +1,7 @@
 import duckdb, pyproj, time, requests, random
 import pandas as pd
 import pathlib
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, load, dump
 import streamlit as st
 from pathlib import Path
 from shapely.geometry import MultiPoint
@@ -96,9 +96,6 @@ def compute_wkt_string(read_data_to_modify, sequence_idx, radius, lat_col, lon_c
     hull_metric = transform(project, hull)
     buffered = hull_metric.buffer(radius * 1000)
 
-    # compute the area for data aggregation later
-    area_km2 = buffered.area / 1e6
-
     project_back = pyproj.Transformer.from_crs(
         "EPSG:3857", "EPSG:4326", always_xy=True
     ).transform
@@ -107,7 +104,7 @@ def compute_wkt_string(read_data_to_modify, sequence_idx, radius, lat_col, lon_c
 
     con.close()
 
-    return buffered_geo, area_km2
+    return buffered_geo
 
 
 def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius):
@@ -161,16 +158,15 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
             break
         else:
             # process each chunk seperately. data inside the chunk can be processed in parallel
-            wkt_data = Parallel(n_jobs=-2)(
+            wkts = Parallel(n_jobs=-2)(
                 delayed(compute_wkt_string)(temp_db, idx, radius, lat_col, lon_col)
                 for idx in data_chunk["sequence_idx"]
             )
 
-            wkts, areas = zip(*wkt_data)
             # create a dataframe with idx wkt
             wkt_df = pd.DataFrame(
-                data=zip(data_chunk["sequence_idx"], wkts, areas),
-                columns=["sequence_idx", "wkt_string", "distribution_size"],
+                data=zip(data_chunk["sequence_idx"], wkts),
+                columns=["sequence_idx", "wkt_string"],
             )
             wkt_df["radius"] = radius
             # save to parquet for intermediate results
@@ -312,7 +308,7 @@ def validation_api_request(species_key, wkt_string) -> str:
             backoff *= 2
 
 
-def api_validation(temp_db, temp_folder):
+def initialize_download(temp_db, temp_folder, username, password, email):
     # establish the connection to the duckdb database
     temp_db_con = duckdb.connect(temp_db, read_only=True)
     temp_db_con.execute("INSTALL spatial; LOAD spatial;")
@@ -362,9 +358,9 @@ def api_validation(temp_db, temp_folder):
     occ.download(
         queries=download_predicate,
         format="SIMPLE_PARQUET",
-        user="lokal0209",
-        pwd="FVAIorWsN1NJHEjeitFW",
-        email="dominik.buchner@uni-due.de",
+        user=username,
+        pwd=password,
+        email=email,
     )
 
 
@@ -527,6 +523,7 @@ def main():
     # define the temp folder to look for intermediate saves
     temp_folder = st.session_state["read_data_to_modify"].parent.parent.joinpath("temp")
     temp_db = Path(temp_folder).joinpath("temp.duckdb")
+    download_pickle = temp_folder.joinpath("download.pkl")
 
     # header
     st.title("Validate species names via GBIF record search")
@@ -625,8 +622,48 @@ def main():
             if not map_data.empty:
                 st.map(map_data, latitude="lat", longitude="lon", color="color")
 
-        # option to reset the species distribution data
-        compute = st.button(label="Validate species via GBIF API", type="primary")
+        # give the input fields for username, password and email
+        col1, col2, col3 = st.columns(3)
+
+        st.info(
+            """To submit a download to GBIF credentials are required. They will only be used to 
+            initialize the download and never be stored. After sending the download the fields will
+            be emptied automatically. You will receive an email once the download is finished.""",
+            icon="ℹ️",
+        )
+
+        with col1:
+            user = st.text_input(label="GBIF username")
+        with col2:
+            pwd = st.text_input(label="GBIF password", type="password")
+        with col3:
+            email = st.text_input(label="Your mail adress")
+
+        # option to initialize the download
+        if user and pwd and email:
+            validate = st.button(
+                label="Initialize download of validation data",
+                type="primary",
+                disabled=False,
+            )
+        else:
+            validate = st.button(
+                label="Initialize download of validation data",
+                type="primary",
+                disabled=True,
+            )
+
+        if validate:
+            with st.spinner("Initializing download. Hold on.", show_time=True):
+                pickle_data = initialize_download(
+                    temp_db, temp_folder, user, pwd, email
+                )
+                # pickle the download data after the download has been requested
+                dump(pickle_data, download_pickle)
+            # pickle the returned download data
+
+        st.divider()
+
         reset = st.button(label="Reset species distributions", type="secondary")
 
         # reset wkt data
@@ -634,10 +671,15 @@ def main():
             temp_db.unlink()
             st.rerun()
 
-        # perform the GBIF validation algorithm
-        if compute:
-            with st.spinner("Querying GBIF API. Hold on.", show_time=True):
-                api_validation(temp_db, temp_folder)
+            # compute the bounding box and collect the usage keys
+
+            # initialize the download
+
+            # wait for the download to complete (maybe show time when it was started and current status), button to check status
+
+            # download the occurence data on button click
+
+            # calculate and add the validation to the metadata
 
             # # ingest the data into the sequence metadata
             # add_validation_to_metadata(
