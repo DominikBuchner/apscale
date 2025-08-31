@@ -10,6 +10,7 @@ from shapely.geometry.polygon import orient
 from shapely import wkt
 from pygbif import occurrences as occ
 from pygbif.gbifutils import NoResultException
+from shapely.ops import unary_union
 
 
 def check_metadata(read_data_to_modify):
@@ -95,6 +96,9 @@ def compute_wkt_string(read_data_to_modify, sequence_idx, radius, lat_col, lon_c
     hull_metric = transform(project, hull)
     buffered = hull_metric.buffer(radius * 1000)
 
+    # compute the area for data aggregation later
+    area_km2 = buffered.area / 1e6
+
     project_back = pyproj.Transformer.from_crs(
         "EPSG:3857", "EPSG:4326", always_xy=True
     ).transform
@@ -103,7 +107,7 @@ def compute_wkt_string(read_data_to_modify, sequence_idx, radius, lat_col, lon_c
 
     con.close()
 
-    return buffered_geo
+    return buffered_geo, area_km2
 
 
 def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius):
@@ -157,14 +161,16 @@ def compute_species_distributions(read_data_to_modify, lat_col, lon_col, radius)
             break
         else:
             # process each chunk seperately. data inside the chunk can be processed in parallel
-            wkts = Parallel(n_jobs=-2)(
+            wkt_data = Parallel(n_jobs=-2)(
                 delayed(compute_wkt_string)(temp_db, idx, radius, lat_col, lon_col)
                 for idx in data_chunk["sequence_idx"]
             )
+
+            wkts, areas = zip(*wkt_data)
             # create a dataframe with idx wkt
             wkt_df = pd.DataFrame(
-                data=zip(data_chunk["sequence_idx"], wkts),
-                columns=["sequence_idx", "wkt_string"],
+                data=zip(data_chunk["sequence_idx"], wkts, areas),
+                columns=["sequence_idx", "wkt_string", "distribution_size"],
             )
             wkt_df["radius"] = radius
             # save to parquet for intermediate results
@@ -224,7 +230,7 @@ def generate_map_preview_table(temp_db) -> pd.DataFrame:
             DISTINCT(wkt.sequence_idx),
             dd.gbif_taxonomy,
             dd.gbif_usage_key,
-            wkt.radius
+            wkt.radius,
         FROM wkt_data AS wkt
         LEFT JOIN distribution_data AS dd
             ON wkt.sequence_idx = dd.sequence_idx
@@ -307,57 +313,59 @@ def validation_api_request(species_key, wkt_string) -> str:
 
 
 def api_validation(temp_db, temp_folder):
-    # establish the connection
-    temp_db_con = duckdb.connect(temp_db)
+    # establish the connection to the duckdb database
+    temp_db_con = duckdb.connect(temp_db, read_only=True)
+    temp_db_con.execute("INSTALL spatial; LOAD spatial;")
 
-    # collect the required data
-    api_data = temp_db_con.execute(
-        f"""
-        SELECT 
-            DISTINCT(wd.sequence_idx),
-            dd.gbif_taxonomy,
-            dd.gbif_usage_key,
-            wd.wkt_string
-        FROM wkt_data AS wd
-        LEFT JOIN distribution_data AS dd
-            ON wd.sequence_idx = dd.sequence_idx
+    minx, miny, maxx, maxy = temp_db_con.execute(
         """
+        SELECT
+            MIN(ST_XMin(ST_GeomFromText(wkt_string))) AS minx,
+            MIN(ST_YMin(ST_GeomFromText(wkt_string))) AS miny,
+            MAX(ST_XMax(ST_GeomFromText(wkt_string))) AS maxx,
+            MAX(ST_YMax(ST_GeomFromText(wkt_string))) AS maxy
+        FROM wkt_data
+    """
+    ).fetchone()
+
+    bbox = f"POLYGON(({minx} {miny}, {minx} {maxy}, {maxx} {maxy}, {maxx} {miny}, {minx} {miny}))"
+
+    # load all distinct usage keys
+    download_data = (
+        temp_db_con.execute(
+            f"""
+        SELECT
+            DISTINCT(dd.gbif_usage_key)
+        FROM distribution_data AS dd
+        """
+        )
+        .df()["gbif_usage_key"]
+        .to_list()
     )
 
-    chunk_count = 1
-
-    while True:
-        api_data_chunk = api_data.fetch_df_chunk()
-        if api_data_chunk.empty:
-            break
-        else:
-            # create a filename for the chunk
-            output_name = temp_folder.joinpath(
-                f"gbif_validation_{chunk_count}.parquet.snappy"
-            )
-            chunk_args = zip(
-                api_data_chunk["gbif_usage_key"], api_data_chunk["wkt_string"]
-            )
-            validation_status = Parallel(n_jobs=-2)(
-                delayed(validation_api_request)(gbif_usage_key, wkt_string)
-                for gbif_usage_key, wkt_string in chunk_args
-            )
-            # some user output
-            st.toast(f"Chunk {chunk_count} processed!")
-
-            # save to parquet
-            chunk_output = pd.DataFrame(
-                zip(api_data_chunk["sequence_idx"], validation_status),
-                columns=["sequence_idx", "gbif_validation"],
-            )
-
-            # write to parquet to later ingest into the main database
-            chunk_output.to_parquet(output_name)
-
-            # increase the chunk count
-            chunk_count += 1
-
     temp_db_con.close()
+
+    download_predicate = {
+        "type": "and",
+        "predicates": [
+            {
+                "type": "in",
+                "key": "TAXON_KEY",
+                "values": [str(k) for k in download_data],
+                "matchCase": False,
+            },
+            {"type": "within", "geometry": bbox},
+        ],
+    }
+
+    # Submit the download
+    occ.download(
+        queries=download_predicate,
+        format="SIMPLE_PARQUET",
+        user="lokal0209",
+        pwd="FVAIorWsN1NJHEjeitFW",
+        email="dominik.buchner@uni-due.de",
+    )
 
 
 def add_validation_to_metadata(read_data_to_modify, temp_folder):
@@ -631,32 +639,32 @@ def main():
             with st.spinner("Querying GBIF API. Hold on.", show_time=True):
                 api_validation(temp_db, temp_folder)
 
-            # ingest the data into the sequence metadata
-            add_validation_to_metadata(
-                st.session_state["read_data_to_modify"], temp_folder
-            )
-            # remove temp db and tempfolder
-            temp_db.unlink()
-            temp_folder.rmdir()
-            st.rerun()
+            # # ingest the data into the sequence metadata
+            # add_validation_to_metadata(
+            #     st.session_state["read_data_to_modify"], temp_folder
+            # )
+            # # remove temp db and tempfolder
+            # temp_db.unlink()
+            # temp_folder.rmdir()
+            # st.rerun()
 
     # if validated data exists
-    if gbif_validated:
-        st.write("GBIF validation has already been performed.")
-        # display preview rows
-        preview_rows = st.number_input("Rows to display in preview", min_value=5)
-        # display the preview
-        st.write(
-            validation_preview(
-                st.session_state["read_data_to_modify"], n_rows=preview_rows
-            )
-        )
+    # if gbif_validated:
+    #     st.write("GBIF validation has already been performed.")
+    #     # display preview rows
+    #     preview_rows = st.number_input("Rows to display in preview", min_value=5)
+    #     # display the preview
+    #     st.write(
+    #         validation_preview(
+    #             st.session_state["read_data_to_modify"], n_rows=preview_rows
+    #         )
+    #     )
 
-        reset_vali = st.button("Reset GBIF validation", type="primary")
+    #     reset_vali = st.button("Reset GBIF validation", type="primary")
 
-        if reset_vali:
-            reset_validation(st.session_state["read_data_to_modify"])
-            st.rerun()
+    #     if reset_vali:
+    #         reset_validation(st.session_state["read_data_to_modify"])
+    #         st.rerun()
 
 
 main()
