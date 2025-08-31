@@ -1,4 +1,4 @@
-import duckdb, pyproj, time, requests, random
+import duckdb, pyproj, time, requests, random, zipfile, glob, shutil
 import pandas as pd
 import pathlib
 from joblib import Parallel, delayed, load, dump
@@ -11,6 +11,7 @@ from shapely import wkt
 from pygbif import occurrences as occ
 from pygbif.gbifutils import NoResultException
 from shapely.ops import unary_union
+from streamlit_autorefresh import st_autorefresh
 
 
 def check_metadata(read_data_to_modify):
@@ -281,33 +282,6 @@ def select_map_data(temp_db, sequence_idx) -> pd.DataFrame:
     return map_data
 
 
-def validation_api_request(species_key, wkt_string) -> str:
-    # define a backoff factor for each individual request
-    backoff = 1.0
-    # perform the api call
-    while True:
-        try:
-            validation_result = occ.search(
-                taxonKey=species_key, geometry=wkt_string, limit=0, timeout=60
-            )
-            print(f"{species_key}: sucess!")
-            return (
-                "plausible" if validation_result.get("count", 0) > 0 else "implausible"
-            )
-        except (
-            requests.exceptions.HTTPError,
-            requests.exceptions.ConnectionError,
-        ) as e:
-            if e.response.status_code == 429:
-                print(f"{species_key}: HTTP Exception!")
-                time.sleep(random.uniform(0, 3))
-
-        except NoResultException:
-            print(f"{species_key}: No Result Exception!")
-            time.sleep(random.uniform(0, 3))
-            backoff *= 2
-
-
 def initialize_download(temp_db, temp_folder, username, password, email):
     # establish the connection to the duckdb database
     temp_db_con = duckdb.connect(temp_db, read_only=True)
@@ -324,10 +298,10 @@ def initialize_download(temp_db, temp_folder, username, password, email):
     """
     ).fetchone()
 
-    bbox = f"POLYGON(({minx} {miny}, {minx} {maxy}, {maxx} {maxy}, {maxx} {miny}, {minx} {miny}))"
+    # bbox = f"POLYGON(({minx} {miny}, {minx} {maxy}, {maxx} {maxy}, {maxx} {miny}, {minx} {miny}))"
 
     # load all distinct usage keys
-    download_data = (
+    usage_keys = (
         temp_db_con.execute(
             f"""
         SELECT
@@ -347,21 +321,46 @@ def initialize_download(temp_db, temp_folder, username, password, email):
             {
                 "type": "in",
                 "key": "TAXON_KEY",
-                "values": [str(k) for k in download_data],
+                "values": [str(k) for k in usage_keys],
                 "matchCase": False,
             },
-            {"type": "within", "geometry": bbox},
+            # Latitude min
+            {
+                "type": "greaterThanOrEquals",
+                "key": "DECIMAL_LATITUDE",
+                "value": miny,
+            },
+            # Latitude max
+            {
+                "type": "lessThanOrEquals",
+                "key": "DECIMAL_LATITUDE",
+                "value": maxy,
+            },
+            # Longitude min
+            {
+                "type": "greaterThanOrEquals",
+                "key": "DECIMAL_LONGITUDE",
+                "value": minx,
+            },
+            # Longitude max
+            {
+                "type": "lessThanOrEquals",
+                "key": "DECIMAL_LONGITUDE",
+                "value": maxx,
+            },
         ],
     }
 
-    # Submit the download
-    occ.download(
+    # submit the download
+    download_info = occ.download(
         queries=download_predicate,
         format="SIMPLE_PARQUET",
         user=username,
         pwd=password,
         email=email,
     )
+
+    return download_info
 
 
 def add_validation_to_metadata(read_data_to_modify, temp_folder):
@@ -508,6 +507,90 @@ def reset_validation(read_data_to_modify: str) -> None:
     read_data_to_modify_con.close()
 
 
+def download_initialized(pickle_path):
+    if pickle_path.is_file():
+        return True
+    else:
+        return False
+
+
+def download_info(pickle_path):
+    if not download_initialized(pickle_path):
+        st.info("There is no active download at the moment.")
+        return False, False
+    else:
+        download_data = load(pickle_path)
+        download_key = download_data[0]
+        meta = occ.download_meta(download_key)
+        created = meta["created"]
+        status = meta["status"]
+        st.info(
+            f"""
+                The download key is: {download_key}\n
+                The download has been created at: {created}\n
+                Current status: {status}\n
+                This page will refresh every 20 seconds until the data is ready.
+                """
+        )
+
+        return status, download_key
+
+
+def download_gbif_data(download_key, temp_folder):
+    # show some status updates
+    status = st.status("Downloading and processing data.", expanded=True)
+    # download the data to the temp folder, unpack it and load it into a duckdb database
+    occ.download_get(download_key, path=temp_folder)
+    status.write("Download completed.")
+    # unzip and push data into duckdb
+    status.write("Unzipping downloaded results.")
+    download_file = temp_folder.joinpath(f"{download_key}.zip")
+
+    with zipfile.ZipFile(download_file, "r") as in_stream:
+        in_stream.extractall(temp_folder)
+    # remove the zip file
+    download_file.unlink()
+
+    # Load data into duckDB
+    status.write("Loading data into DuckDB.")
+
+    # collect all files to load into duckdb (remove the empty file first)
+    for file in temp_folder.joinpath("occurrence.parquet").iterdir():
+        if file.stat().st_size == 0:
+            file.unlink()
+
+    # load into duckdb
+    gbif_database = temp_folder.joinpath("gbif_db.duckdb")
+    gbif_con = duckdb.connect(gbif_database)
+    gbif_con.execute(
+        f"""
+        CREATE OR REPLACE TABLE 
+            occ_data 
+        AS SELECT 
+            species
+            decimallatitude AS lat
+            decimallongitude AS lon
+            taxonkey
+        FROM read_parquet('{temp_folder.joinpath("occurrence.parquet", ("*"))}')
+        """
+    )
+
+    # close the connection
+    gbif_con.close()
+
+    status.write("Data successfully loaded.")
+
+    # remove the downloaded parquet
+    shutil.rmtree(temp_folder.joinpath("occurrence.parquet"))
+
+    # return status widget to use further
+    return status
+
+
+def compute_validation(status):
+    status.update(label="Finished", state="complete", expanded=False)
+
+
 def main():
     # prevent page from scroling up on click
     st.markdown(
@@ -622,15 +705,15 @@ def main():
             if not map_data.empty:
                 st.map(map_data, latitude="lat", longitude="lon", color="color")
 
-        # give the input fields for username, password and email
-        col1, col2, col3 = st.columns(3)
-
         st.info(
             """To submit a download to GBIF credentials are required. They will only be used to 
             initialize the download and never be stored. After sending the download the fields will
             be emptied automatically. You will receive an email once the download is finished.""",
             icon="ℹ️",
         )
+
+        # give the input fields for username, password and email
+        col1, col2, col3 = st.columns(3)
 
         with col1:
             user = st.text_input(label="GBIF username")
@@ -640,7 +723,7 @@ def main():
             email = st.text_input(label="Your mail adress")
 
         # option to initialize the download
-        if user and pwd and email:
+        if user and pwd and email and not download_initialized(download_pickle):
             validate = st.button(
                 label="Initialize download of validation data",
                 type="primary",
@@ -660,8 +743,30 @@ def main():
                 )
                 # pickle the download data after the download has been requested
                 dump(pickle_data, download_pickle)
-            # pickle the returned download data
 
+                # rerun to clear all fields and disable the button
+                st.rerun()
+
+        # display download info
+        status, download_key = download_info(download_pickle)
+
+        if status == "SUCCEEDED":
+            download_process = st.button(
+                label="Download and process data", disabled=False, type="primary"
+            )
+        else:
+            download_process = st.button(
+                label="Download and process data", disabled=True
+            )
+            st_autorefresh(interval=20_000)
+
+        # download and process the data, remove download files afterwards
+        if download_process:
+            # download the data and pass to duckdb
+            status = download_gbif_data(download_key, temp_folder)
+
+            # compute the actual validaton
+            compute_validation(status)
         st.divider()
 
         reset = st.button(label="Reset species distributions", type="secondary")
@@ -670,17 +775,6 @@ def main():
         if reset:
             temp_db.unlink()
             st.rerun()
-
-            # compute the bounding box and collect the usage keys
-
-            # initialize the download
-
-            # wait for the download to complete (maybe show time when it was started and current status), button to check status
-
-            # download the occurence data on button click
-
-            # calculate and add the validation to the metadata
-
             # # ingest the data into the sequence metadata
             # add_validation_to_metadata(
             #     st.session_state["read_data_to_modify"], temp_folder
