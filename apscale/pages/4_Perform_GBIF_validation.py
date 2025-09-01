@@ -764,13 +764,22 @@ def main():
 
         st.info(
             """To submit a download to GBIF credentials are required. They will only be used to 
-            initialize the download and never be stored. After sending the download the fields will
-            be emptied automatically. You will receive an email once the download is finished.""",
+            initialize the download and never be stored. Fields will be cleared once the download
+            request has been sent. You will receive an email once the download is finished.""",
             icon="ℹ️",
         )
 
         # give the input fields for username, password and email
         col1, col2, col3 = st.columns(3)
+
+        if "reset_inputs" not in st.session_state:
+            st.session_state.reset_inputs = False
+
+        if st.session_state.reset_inputs:
+            st.session_state.user = ""
+            st.session_state.pwd = ""
+            st.session_state.email = ""
+            st.session_state.reset_inputs = False
 
         with col1:
             user = st.text_input(label="GBIF username", key="user")
@@ -802,9 +811,7 @@ def main():
                 dump(pickle_data, download_pickle)
 
                 # clear the fields
-                st.session_state["user"] = ""
-                st.session_state["pwd"] = ""
-                st.session_state["email"] = ""
+                st.session_state.reset_inputs = True
 
                 # rerun to clear all fields and disable the button
                 st.rerun()
