@@ -570,7 +570,7 @@ def download_gbif_data(download_key, temp_folder):
             occ_data 
         AS SELECT
             CAST(taxonkey AS BIGINT) AS taxonkey,
-            ST_Collect(ARRAY_AGG(ST_Point(decimallongitude, decimallatitude))) AS multipoints
+            ST_ConvexHull(ST_Collect(ARRAY_AGG(ST_Point(decimallongitude, decimallatitude)))) AS convex_hull
         FROM read_parquet('{temp_folder.joinpath("occurrence.parquet", ("*"))}')
         GROUP BY taxonkey
         """
@@ -601,17 +601,29 @@ def compute_validation(status, temp_db, temp_folder, download_pickle):
     # collect the polygon data
     temp_db_con.execute(
         f"""
-        CREATE OR REPLACE TABLE main.validation_data AS
+        CREATE OR REPLACE TABLE main.seqs_to_validate AS
         SELECT
             DISTINCT(wd.sequence_idx),
             dd.gbif_usage_key,
-            wd.wkt_string,
-            god.multipoints
+            wd.wkt_string
         FROM wkt_data AS wd
         LEFT JOIN distribution_data AS dd
             ON wd.sequence_idx = dd.sequence_idx
+        """
+    )
+
+    # collect the polygon data
+    temp_db_con.execute(
+        f"""
+        CREATE OR REPLACE TABLE main.validation_data AS
+        SELECT
+            stv.sequence_idx,
+            stv.gbif_usage_key,
+            stv.wkt_string,
+            god.convex_hull
+        FROM main.seqs_to_validate AS stv
         LEFT JOIN gbif_data.occ_data AS god
-            ON dd.gbif_usage_key = god.taxonkey
+            ON stv.gbif_usage_key = god.taxonkey
         """
     )
 
@@ -626,7 +638,7 @@ def compute_validation(status, temp_db, temp_folder, download_pickle):
                 sequence_idx,
                 CASE 
                     WHEN ST_Intersects(
-                        multipoints,
+                        convex_hull,
                         ST_GeomFromText(wkt_string)
                     ) THEN 'plausible'
                     ELSE 'implausible'
