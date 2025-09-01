@@ -641,7 +641,7 @@ def compute_validation(status, temp_db, temp_folder, download_pickle):
 
     # remove the download file in the end and all other files not longer needed
     if download_pickle.is_file():
-        # download_pickle.unlink()
+        download_pickle.unlink()
         gbif_database.unlink()
 
     # finalize the status window
