@@ -773,11 +773,11 @@ def main():
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            user = st.text_input(label="GBIF username")
+            user = st.text_input(label="GBIF username", key="user")
         with col2:
-            pwd = st.text_input(label="GBIF password", type="password")
+            pwd = st.text_input(label="GBIF password", type="password", key="pwd")
         with col3:
-            email = st.text_input(label="Your mail adress")
+            email = st.text_input(label="Your mail adress", key="email")
 
         # option to initialize the download
         if user and pwd and email and not download_initialized(download_pickle):
@@ -800,6 +800,11 @@ def main():
                 )
                 # pickle the download data after the download has been requested
                 dump(pickle_data, download_pickle)
+
+                # clear the fields
+                st.session_state["user"] = ""
+                st.session_state["pwd"] = ""
+                st.session_state["email"] = ""
 
                 # rerun to clear all fields and disable the button
                 st.rerun()
