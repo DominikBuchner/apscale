@@ -367,7 +367,7 @@ def add_validation_to_metadata(read_data_to_modify, temp_folder):
     # connect to the main database
     read_data_to_modify_con = duckdb.connect(read_data_to_modify)
     # collect the parquet data
-    parquet_files = temp_folder.joinpath("gbif_validation_*.parquet.snappy")
+    parquet_files = temp_folder.joinpath("gbif_validation.parquet.snappy")
 
     # create a view over the parquet files
     read_data_to_modify_con.execute(
@@ -398,7 +398,7 @@ def add_validation_to_metadata(read_data_to_modify, temp_folder):
     )
 
     # remove the parquet files
-    for file in temp_folder.glob("gbif_validation_*.parquet.snappy"):
+    for file in temp_folder.glob("gbif_validation.parquet.snappy"):
         if file.is_file():
             file.unlink()
 
@@ -548,6 +548,7 @@ def download_gbif_data(download_key, temp_folder):
 
     with zipfile.ZipFile(download_file, "r") as in_stream:
         in_stream.extractall(temp_folder)
+
     # remove the zip file
     download_file.unlink()
 
@@ -562,16 +563,16 @@ def download_gbif_data(download_key, temp_folder):
     # load into duckdb
     gbif_database = temp_folder.joinpath("gbif_db.duckdb")
     gbif_con = duckdb.connect(gbif_database)
+    gbif_con.execute("INSTALL spatial; LOAD spatial;")
     gbif_con.execute(
         f"""
         CREATE OR REPLACE TABLE 
             occ_data 
-        AS SELECT 
-            species,
-            decimallatitude AS lat,
-            decimallongitude AS lon,
-            taxonkey
+        AS SELECT
+            CAST(taxonkey AS BIGINT) AS taxonkey,
+            ST_Collect(ARRAY_AGG(ST_Point(decimallongitude, decimallatitude))) AS multipoints
         FROM read_parquet('{temp_folder.joinpath("occurrence.parquet", ("*"))}')
+        GROUP BY taxonkey
         """
     )
 
@@ -587,7 +588,63 @@ def download_gbif_data(download_key, temp_folder):
     return status
 
 
-def compute_validation(status):
+def compute_validation(status, temp_db, temp_folder, download_pickle):
+    # update the status
+    status.write("Computing validation.")
+
+    # collect the required data to validate
+    temp_db_con = duckdb.connect(temp_db)
+    gbif_database = temp_folder.joinpath("gbif_db.duckdb")
+    temp_db_con.execute(f"ATTACH '{gbif_database}' as gbif_data")
+    temp_db_con.execute("INSTALL spatial; LOAD spatial;")
+
+    # collect the polygon data
+    temp_db_con.execute(
+        f"""
+        CREATE OR REPLACE TABLE main.validation_data AS
+        SELECT
+            DISTINCT(wd.sequence_idx),
+            dd.gbif_usage_key,
+            wd.wkt_string,
+            god.multipoints
+        FROM wkt_data AS wd
+        LEFT JOIN distribution_data AS dd
+            ON wd.sequence_idx = dd.sequence_idx
+        LEFT JOIN gbif_data.occ_data AS god
+            ON dd.gbif_usage_key = god.taxonkey
+        """
+    )
+
+    # create an output file as parquet to ingest in the next step
+    output_parquet = temp_folder.joinpath("gbif_validation.parquet.snappy")
+
+    # create the validation parquet
+    temp_db_con.execute(
+        f"""
+        COPY (
+            SELECT
+                sequence_idx,
+                CASE 
+                    WHEN ST_Intersects(
+                        multipoints,
+                        ST_GeomFromText(wkt_string)
+                    ) THEN 'plausible'
+                    ELSE 'implausible'
+                END AS gbif_validation
+            FROM main.validation_data
+        ) TO '{output_parquet}' (FORMAT PARQUET)
+        """
+    )
+
+    # close the connection
+    temp_db_con.close()
+
+    # remove the download file in the end and all other files not longer needed
+    if download_pickle.is_file():
+        # download_pickle.unlink()
+        gbif_database.unlink()
+
+    # finalize the status window
     status.update(label="Finished", state="complete", expanded=False)
 
 
@@ -766,7 +823,17 @@ def main():
             status = download_gbif_data(download_key, temp_folder)
 
             # compute the actual validaton
-            compute_validation(status)
+            compute_validation(status, temp_db, temp_folder, download_pickle)
+
+            # ingest the data into the sequence metadata
+            add_validation_to_metadata(
+                st.session_state["read_data_to_modify"], temp_folder
+            )
+            # remove temp db and tempfolder
+            temp_db.unlink()
+            temp_folder.rmdir()
+            st.rerun()
+
         st.divider()
 
         reset = st.button(label="Reset species distributions", type="secondary")
@@ -774,33 +841,26 @@ def main():
         # reset wkt data
         if reset:
             temp_db.unlink()
+            download_pickle.unlink()
             st.rerun()
-            # # ingest the data into the sequence metadata
-            # add_validation_to_metadata(
-            #     st.session_state["read_data_to_modify"], temp_folder
-            # )
-            # # remove temp db and tempfolder
-            # temp_db.unlink()
-            # temp_folder.rmdir()
-            # st.rerun()
 
     # if validated data exists
-    # if gbif_validated:
-    #     st.write("GBIF validation has already been performed.")
-    #     # display preview rows
-    #     preview_rows = st.number_input("Rows to display in preview", min_value=5)
-    #     # display the preview
-    #     st.write(
-    #         validation_preview(
-    #             st.session_state["read_data_to_modify"], n_rows=preview_rows
-    #         )
-    #     )
+    if gbif_validated:
+        st.write("GBIF validation has already been performed.")
+        # display preview rows
+        preview_rows = st.number_input("Rows to display in preview", min_value=5)
+        # display the preview
+        st.write(
+            validation_preview(
+                st.session_state["read_data_to_modify"], n_rows=preview_rows
+            )
+        )
 
-    #     reset_vali = st.button("Reset GBIF validation", type="primary")
+        reset_vali = st.button("Reset GBIF validation", type="primary")
 
-    #     if reset_vali:
-    #         reset_validation(st.session_state["read_data_to_modify"])
-    #         st.rerun()
+        if reset_vali:
+            reset_validation(st.session_state["read_data_to_modify"])
+            st.rerun()
 
 
 main()
