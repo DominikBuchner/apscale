@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="apscale",
-    version="4.2.2",
+    version="4.2.3",
     author="Dominik Buchner",
     author_email="dominik.buchner524@googlemail.com",
     description="Advanced Pipeline for Simple yet Comprehensive AnaLysEs of DNA metabarcoding data",
@@ -34,6 +34,8 @@ setuptools.setup(
         "Shapely >= 2.1.1",
         "streamlit >= 1.45.1",
         "tables >= 3.9.0",
+        "lxml-html-clean >= 0.4",
+        "streamlit-autorefresh > 1.0.0",
     ],
     include_package_data=True,
     classifiers=[
