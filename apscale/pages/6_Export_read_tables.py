@@ -453,13 +453,13 @@ def export_read_tables(
             "SELECT sequence_idx FROM temp_db.seq_data"
         ).fetchall()
         sequence_ids = [row[0] for row in sequence_ids]
-        sequence_chunks = more_itertools.chunked(sequence_ids, max_rows_per_chunk)
-
+        sequence_chunks = more_itertools.chunked(
+            sorted(sequence_ids), max_rows_per_chunk
+        )
         # write the output to parquet in chunks
         # SEQUENCES
         for i, chunk in enumerate(sequence_chunks, start=1):
             min_idx, max_idx = min(chunk), max(chunk)
-
             # create a temp filename for output
             temp_filename = Path(
                 output_folder.joinpath(f"pivot_chunk_{i}.parquet.snappy")
