@@ -53,6 +53,8 @@ def pe_merge(
                     "--fastq_allowmergestagger",
                     "--threads",
                     str(1),
+                    "--fastq_qmax",
+                    str(43),
                     "--log",
                     Path(log_path),
                 ],
