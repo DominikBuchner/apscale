@@ -54,7 +54,7 @@ def pe_merge(
                     "--threads",
                     str(1),
                     "--fastq_qmax",
-                    str(43),
+                    str(50),
                     "--log",
                     Path(log_path),
                 ],
