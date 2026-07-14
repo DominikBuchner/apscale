@@ -70,8 +70,7 @@ def build_read_store(input_folder, database_path):
     read_data_store.execute(f"ATTACH '{temp_database}' AS temp_db")
 
     # add the readcounts from the parquet file to the table sequence_read_count_data
-    read_data_store.execute(
-        f"""
+    read_data_store.execute(f"""
         CREATE TABLE temp_db.sequence_read_count_data AS
         SELECT
             CAST(sample AS VARCHAR) AS sample,
@@ -79,12 +78,10 @@ def build_read_store(input_folder, database_path):
             CAST(sequence AS VARCHAR) AS sequence,
             read_count
         FROM read_parquet('{parquet_path}')
-        """
-    )
+        """)
 
     # add the sample data table
-    read_data_store.execute(
-        """
+    read_data_store.execute("""
         CREATE TABLE main.sample_data AS
         SELECT 
             row_number() OVER () AS sample_idx,
@@ -93,12 +90,10 @@ def build_read_store(input_folder, database_path):
             SELECT DISTINCT sample
             FROM temp_db.sequence_read_count_data
         )
-        """
-    )
+        """)
 
     # add the sequence data table
-    read_data_store.execute(
-        """
+    read_data_store.execute("""
         CREATE TABLE main.sequence_data AS
         SELECT 
             row_number() OVER () AS sequence_idx,
@@ -108,12 +103,10 @@ def build_read_store(input_folder, database_path):
             SELECT DISTINCT hash, sequence
             FROM temp_db.sequence_read_count_data
         )
-        """
-    )
+        """)
 
     # create the indexed read_count_data, drop the raw read_count_data
-    read_data_store.execute(
-        """
+    read_data_store.execute("""
         CREATE TABLE main.sequence_read_count_data AS
         SELECT
             sd.sample_idx,
@@ -122,8 +115,7 @@ def build_read_store(input_folder, database_path):
         FROM temp_db.sequence_read_count_data srd
         JOIN main.sample_data sd ON srd.sample = sd.sample
         JOIN main.sequence_data seqd ON srd.hash = seqd.hash AND srd.sequence = seqd.sequence
-    """
-    )
+    """)
 
     # detach and remove the temp db
     read_data_store.execute("DETACH temp_db")
@@ -135,8 +127,7 @@ def build_read_store(input_folder, database_path):
     )
     read_data_store.execute("ALTER TABLE sequence_data ADD COLUMN read_sum BIGINT")
 
-    read_data_store.execute(
-        """
+    read_data_store.execute("""
         UPDATE sequence_data AS sd
         SET
             sequence_order = r.sequence_order,
@@ -150,8 +141,7 @@ def build_read_store(input_folder, database_path):
             GROUP BY sequence_idx  
         ) r
         WHERE sd.sequence_idx = r.sequence_idx
-    """
-    )
+    """)
 
     # give some user output
     nr_samples = read_data_store.execute(
@@ -258,8 +248,7 @@ def generate_read_table(
     )
 
     # build the cross product first
-    read_data_store.execute(
-        f"""
+    read_data_store.execute(f"""
         CREATE OR REPLACE TABLE temp_db.cross_product AS
             SELECT
                 seqd.sequence_idx,
@@ -268,13 +257,11 @@ def generate_read_table(
             FROM
                 main.{sequence_type}_data AS seqd
             CROSS JOIN main.sample_data AS sd                    
-        """
-    )
+        """)
 
     print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Joining in read counts.")
 
-    read_data_store.execute(
-        f"""
+    read_data_store.execute(f"""
     CREATE OR REPLACE TABLE temp_db.read_table_data AS
         SELECT
             cp.sequence_idx,
@@ -285,8 +272,7 @@ def generate_read_table(
         LEFT JOIN main.{sequence_type}_read_count_data AS rcd
             ON cp.sequence_idx = rcd.sequence_idx
             AND cp.sample_idx = rcd.sample_idx
-    """
-    )
+    """)
 
     # if excel is used as output format compute the maximum samples per excel
     if sequence_count > 1_000_000:
@@ -307,21 +293,18 @@ def generate_read_table(
         # for each chunk create a pivot table and stream it directly to excel
         for idx, chunk in sample_names_iter:
             sample_selector = ", ".join(f"'{sample}'" for sample in chunk)
-            sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
+            sample_columns = ", ".join(f'"{sample}"' for sample in chunk)
 
             # select the subset of samples we are currently looking at
-            read_data_store.execute(
-                f"""
+            read_data_store.execute(f"""
                 CREATE OR REPLACE TABLE temp_db.filtered AS  
                     SELECT * FROM temp_db.read_table_data rtd
                     WHERE rtd.sample IN ({sample_selector})
-                """
-            )
+                """)
 
             print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table.")
 
-            read_data_store.execute(
-                f"""
+            read_data_store.execute(f"""
                 CREATE OR REPLACE TABLE temp_db.pivot AS
                     SELECT sequence_idx, {sample_columns}
                     FROM (
@@ -329,15 +312,13 @@ def generate_read_table(
                         FROM temp_db.filtered
                     )
                     PIVOT (SUM(read_count) FOR sample IN ({sample_columns}))
-                """
-            )
+                """)
 
             print(
                 f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes, sequences and ordering table."
             )
 
-            read_table = read_data_store.execute(
-                f"""
+            read_table = read_data_store.execute(f"""
                 SELECT
                     sd.hash,
                     sd.sequence,
@@ -347,8 +328,7 @@ def generate_read_table(
                     ON sd.sequence_idx = pt.sequence_idx
                 WHERE sd.sequence != 'dummy_seq'
                 ORDER BY sd.sequence_order
-                """
-            ).df()
+                """).df()
 
             print(
                 f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing Excel output file."
@@ -401,8 +381,7 @@ def generate_read_table(
         temp_filename = Path(temp_folder.joinpath(f"pivot_chunk_{i}.parquet.snappy"))
 
         # perform the pivot for this chunk
-        read_data_store.execute(
-            f"""
+        read_data_store.execute(f"""
             COPY (
                 SELECT sequence_idx, {sample_columns}
                 FROM (
@@ -413,8 +392,7 @@ def generate_read_table(
                 PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
             )
             TO '{temp_filename}' (FORMAT PARQUET)
-            """
-        )
+            """)
 
         # give user output
         print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Chunk {i} processed.")
@@ -427,12 +405,10 @@ def generate_read_table(
     parquet_path = Path(temp_folder.joinpath("pivot_chunk_*.parquet.snappy"))
 
     # extract the read table with correct column names
-    read_data_store.execute(
-        f"""
+    read_data_store.execute(f"""
         CREATE OR REPLACE TABLE temp_db.pivot AS 
             SELECT * FROM read_parquet('{parquet_path}')
-        """
-    )
+        """)
 
     # remove the parquet files
     for file in temp_folder.glob("pivot_chunk_*.parquet.snappy"):
@@ -440,8 +416,7 @@ def generate_read_table(
             file.unlink()
 
     # build the final read_table
-    read_table = read_data_store.execute(
-        f"""
+    read_table = read_data_store.execute(f"""
         COPY (
             SELECT
                 sd.hash,
@@ -453,8 +428,7 @@ def generate_read_table(
             WHERE sd.sequence != 'dummy_seq'
             ORDER BY sd.sequence_order
         ) TO '{output_file_name_parquet}' (FORMAT 'parquet')
-        """
-    )
+        """)
 
     # close the connection
     read_data_store.close()
@@ -513,8 +487,7 @@ def generate_sequence_groups(
     read_data_store = duckdb.connect(database_path)
     temp_db = Path(temp_path).joinpath("temp.duckdb")
     read_data_store.execute(f"ATTACH '{temp_db}' as temp_db")
-    read_data_store.execute(
-        f"""
+    read_data_store.execute(f"""
         CREATE OR REPLACE TABLE temp_db.matchfile_temp AS
         SELECT * FROM read_csv('{matchfile_path}',
             delim = '\\t',
@@ -524,12 +497,10 @@ def generate_sequence_groups(
                 'target': 'STRING',
                 'pct_id': 'DOUBLE'
             }})
-        """
-    )
+        """)
 
     # add sequence_idx and order to the table and save in main table
-    read_data_store.execute(
-        f"""
+    read_data_store.execute(f"""
     CREATE OR REPLACE TABLE temp_db.group_lookup_table AS
         SELECT 
             mt.query,
@@ -544,8 +515,7 @@ def generate_sequence_groups(
             ON mt.query = sd_query.hash
         LEFT JOIN main.sequence_data AS sd_target
             ON mt.target = sd_target.hash
-    """
-    )
+    """)
 
     # fetch the number of rows in the sequence data
     nr_of_sequences = (
@@ -554,13 +524,11 @@ def generate_sequence_groups(
     )
 
     # fetch the ordered sequence data to loop over
-    sequence_data = read_data_store.execute(
-        f"""
+    sequence_data = read_data_store.execute(f"""
         SELECT * FROM main.sequence_data AS sd
         WHERE sd.hash != 'dummy_hash'
         ORDER BY sd.sequence_order
-        """
-    )
+        """)
 
     # flag to use the first sequence always as the first group
     first = True
@@ -597,8 +565,7 @@ def generate_sequence_groups(
                     if first:
                         first = False
                         # add this to the groups found table since it is by definition the first group found
-                        grouping_connection.execute(
-                            f"""
+                        grouping_connection.execute(f"""
                             CREATE OR REPLACE TABLE temp_db.groups_found AS
                             SELECT
                                 CAST(query AS VARCHAR) AS query,
@@ -609,8 +576,7 @@ def generate_sequence_groups(
                                 target_idx,
                                 target_order
                             FROM all_hash_matches
-                            """
-                        )
+                            """)
 
                         mapping_csv.write(f"{sequence_idx}\t{sequence_idx}\n")
                         sequence_counter += 1
@@ -618,20 +584,16 @@ def generate_sequence_groups(
                         continue
 
                     # perform the actual grouping, select all potential matches for the current hash
-                    target_matches = grouping_connection.execute(
-                        f"""
+                    target_matches = grouping_connection.execute(f"""
                         SELECT * FROM temp_db.groups_found sgf 
                         WHERE sgf.target_idx = {sequence_idx}
                         ORDER BY sgf.query_order LIMIT 1
-                        """
-                    ).df()
+                        """).df()
                     # if there is not matching group, add the sequence and all target to the groups found --> it forms a new group
                     if target_matches.empty:
-                        grouping_connection.execute(
-                            f"""
+                        grouping_connection.execute(f"""
                             INSERT INTO temp_db.groups_found SELECT * FROM all_hash_matches
-                            """
-                        )
+                            """)
                         mapping_csv.write(f"{sequence_idx}\t{sequence_idx}\n")
                         sequence_counter += 1
                         pbar.update(1)
@@ -643,8 +605,7 @@ def generate_sequence_groups(
                         pbar.update(1)
 
     # add the group mapping to the main db
-    read_data_store.execute(
-        f"""
+    read_data_store.execute(f"""
         CREATE OR REPLACE TABLE main.group_mapping AS
         SELECT * FROM read_csv('{mapping_csv_path}',
         delim = '\\t',
@@ -653,12 +614,10 @@ def generate_sequence_groups(
             'sequence_idx': 'BIGINT',
             'group_idx': 'BIGINT'
         }})                  
-        """
-    )
+        """)
 
     # add readcounts, merge the groups
-    read_data_store.execute(
-        f"""
+    read_data_store.execute(f"""
         CREATE OR REPLACE TABLE temp_db.group_data_temp AS
         SELECT 
             gmt.group_idx AS sequence_idx,
@@ -667,12 +626,10 @@ def generate_sequence_groups(
         LEFT JOIN main.sequence_data sd
             ON gmt.sequence_idx = sd.sequence_idx
         GROUP BY gmt.group_idx
-        """
-    )
+        """)
 
     # add hash and sequence
-    read_data_store.execute(
-        f"""
+    read_data_store.execute(f"""
         CREATE OR REPLACE TABLE main.group_data AS
         SELECT
             gdt.sequence_idx,
@@ -683,8 +640,7 @@ def generate_sequence_groups(
         FROM temp_db.group_data_temp AS gdt
         LEFT JOIN main.sequence_data AS sd
             ON gdt.sequence_idx = sd.sequence_idx
-        """
-    )
+        """)
 
     nr_of_groups = read_data_store.execute(
         "SELECT COUNT(*) FROM main.group_data"
@@ -696,8 +652,7 @@ def generate_sequence_groups(
 
     # update the sequence_idx column in sequence_read_count_data with group_idx
     # coalesce to include the dummy hash / dummy seq
-    read_data_store.execute(
-        f"""
+    read_data_store.execute(f"""
         CREATE OR REPLACE TABLE temp_db.group_data_temp AS
         SELECT 
             srcd.sample_idx,
@@ -706,12 +661,10 @@ def generate_sequence_groups(
         FROM main.sequence_read_count_data AS srcd
         LEFT JOIN main.group_mapping AS gm
             ON srcd.sequence_idx = gm.sequence_idx
-        """
-    )
+        """)
 
     # groupby sample_idx (any), sequence_idx (any), sum(read_count)
-    read_data_store.execute(
-        f"""
+    read_data_store.execute(f"""
     CREATE OR REPLACE TABLE main.group_read_count_data AS
         SELECT
             gdt.sample_idx,
@@ -719,8 +672,7 @@ def generate_sequence_groups(
             SUM(gdt.read_count) AS read_count
         FROM temp_db.group_data_temp AS gdt
         GROUP BY gdt.sample_idx, gdt.sequence_idx
-    """
-    )
+    """)
 
     read_data_store.close()
     grouping_connection.close()
@@ -746,8 +698,7 @@ def write_log(logfile_base_path: str, database_path: str):
     # connect to the read data store
     read_data_store = duckdb.connect(database_path)
 
-    logfile_cursor = read_data_store.execute(
-        f"""
+    logfile_cursor = read_data_store.execute(f"""
         SELECT
             gm.group_idx,
             sd.hash,
@@ -759,8 +710,7 @@ def write_log(logfile_base_path: str, database_path: str):
         LEFT JOIN group_data AS gd
             ON gm.group_idx = gd.sequence_idx
         ORDER BY gd.sequence_order, sd.read_sum DESC
-        """
-    )
+        """)
 
     # keep track of the files written to far
     file_nr = 1
