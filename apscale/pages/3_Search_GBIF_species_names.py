@@ -4,6 +4,9 @@ import pandas as pd
 from pygbif import species
 from joblib import Parallel, delayed
 
+# COL extended release, the checklist GBIF uses for the new alphanumeric taxon keys
+COL_CHECKLIST_KEY = "7ddf754f-d193-4cc9-b351-99906754a03b"
+
 
 def sequence_metadata_available(read_data_to_modify: str) -> bool:
     """Function to check if sequence metadata is available
@@ -65,20 +68,18 @@ def generate_file_preview(
     return preview_table
 
 
-def api_request(species_name: str) -> str:
-    api_response = species.name_backbone(species_name, timeout=60)
+def api_request(species_name: str) -> tuple:
+    # match against the COL extended release, explicitly set as the default differs between pygbif versions
+    api_response = species.name_backbone(
+        species_name, checklistKey=COL_CHECKLIST_KEY, timeout=60
+    )
 
-    # try to fetch the new name, else return a NULL value
-    # keep repeating until all data is fetched
-    while True:
-        try:
-            species_name, key = api_response["species"], api_response["usageKey"]
-            break
-        except KeyError:
-            species_name, key = pd.NA, pd.NA
-            break
+    # take the species level entry of the classification (alphanumeric key), else return NULL values
+    for entry in api_response.get("classification", []):
+        if entry.get("rank") == "SPECIES":
+            return entry["name"], entry["key"]
 
-    return species_name, key
+    return None, None
 
 
 def query_gbif(read_data_to_modify: str, species_column: str):
@@ -154,7 +155,7 @@ def query_gbif(read_data_to_modify: str, species_column: str):
         "ALTER TABLE sequence_metadata ADD COLUMN gbif_taxonomy TEXT"
     )
     read_data_to_modify.execute(
-        "ALTER TABLE sequence_metadata ADD COLUMN gbif_usage_key BIGINT"
+        "ALTER TABLE sequence_metadata ADD COLUMN gbif_usage_key TEXT"
     )
 
     # add to the sequence metadata
@@ -182,7 +183,7 @@ def query_gbif(read_data_to_modify: str, species_column: str):
         "ALTER TABLE group_metadata ADD COLUMN gbif_taxonomy TEXT"
     )
     read_data_to_modify.execute(
-        "ALTER TABLE group_metadata ADD COLUMN gbif_usage_key BIGINT"
+        "ALTER TABLE group_metadata ADD COLUMN gbif_usage_key TEXT"
     )
 
     # add to the sequence metadata

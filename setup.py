@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="apscale",
-    version="4.3.3",
+    version="4.4.0",
     author="Dominik Buchner",
     author_email="dominik.buchner524@googlemail.com",
     description="Advanced Pipeline for Simple yet Comprehensive AnaLysEs of DNA metabarcoding data",
@@ -29,7 +29,7 @@ setuptools.setup(
         "pandas >= 2.3.0",
         "powerlaw >= 1.5",
         "pyarrow >= 17.0.0",
-        "pygbif >= 0.6.4",
+        "pygbif >= 0.7.0",
         "pyproj >= 3.4.1",
         "Shapely >= 2.1.1",
         "streamlit >= 1.45.1",

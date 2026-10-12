@@ -13,6 +13,9 @@ from pygbif.gbifutils import NoResultException
 from shapely.ops import unary_union
 from streamlit_autorefresh import st_autorefresh
 
+# COL extended release, the checklist GBIF uses for the new alphanumeric taxon keys
+COL_CHECKLIST_KEY = "7ddf754f-d193-4cc9-b351-99906754a03b"
+
 
 def check_metadata(read_data_to_modify):
     read_data_to_modify = duckdb.connect(read_data_to_modify)
@@ -358,6 +361,8 @@ def initialize_download(temp_db, temp_folder, username, password, email):
         user=username,
         pwd=password,
         email=email,
+        # same checklist as used for the name matching, output keys (taxonkey, specieskey) follow it
+        checklistKey=COL_CHECKLIST_KEY,
     )
 
     return download_info
@@ -569,10 +574,10 @@ def download_gbif_data(download_key, temp_folder):
         CREATE OR REPLACE TABLE 
             occ_data 
         AS SELECT
-            CAST(taxonkey AS BIGINT) AS taxonkey,
+            specieskey,
             ST_ConvexHull(ST_Collect(ARRAY_AGG(ST_Point(decimallongitude, decimallatitude)))) AS convex_hull
         FROM read_parquet('{temp_folder.joinpath("occurrence.parquet", ("*"))}')
-        GROUP BY taxonkey
+        GROUP BY specieskey
         """
     )
 
@@ -623,7 +628,7 @@ def compute_validation(status, temp_db, temp_folder, download_pickle):
             god.convex_hull
         FROM main.seqs_to_validate AS stv
         LEFT JOIN gbif_data.occ_data AS god
-            ON stv.gbif_usage_key = god.taxonkey
+            ON stv.gbif_usage_key = god.specieskey
         """
     )
 
