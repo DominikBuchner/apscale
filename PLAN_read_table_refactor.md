@@ -188,13 +188,13 @@ Die loky-Workerprozesse bleiben nach `Parallel(...)` bestehen (wiederverwendbare
 - [x] Spill-/Limit-Test auf `large` (28k Sequenzen × 639 Samples) mit künstlichen Limits, Ergebnis jeweils vollständig identisch (12/12 Prüfungen, 0 Snapshot-Unterschiede): **≥ 1,5 GB laufen mit allen Kernen; 1 GB nur mit ≤ 4 Threads (bei 15 Threads Out of Memory); 600 MB und 150 MB: Out of Memory** auch mit 2 Threads. Befund: Excel-Export und Pivot mit vielen Spalten (639) halten Arbeitsspeicher pro Thread und können nicht beliebig auf Platte ausweichen; das Limit schützt also nur oberhalb von ca. 1 GB (bei dieser Probenzahl). Mit dem Standard (50 % RAM, Threads durch `Limit / 256 MB` gedeckelt) läuft `large` auf jedem Rechner ab ca. 3 GB RAM
 - [x] Commit
 
-### 3.8 DuckDB-Version (ganz am Ende der Performance-Phase)
-Aktuell: `setup.py` verlangt `duckdb>=1.3.1`, getestet wird nur mit 1.5.2 (PyPI: 1.5.6). Bewusst **nicht mitten in den Umbau**, damit Benchmarks nicht durch Versionswechsel verfälscht werden.
-- [ ] Gesamte Suite + Harness auf groß/klein mit 1.5.2 und der dann aktuellen 1.5.x laufen lassen (Laufzeit, Peak-RSS, Snapshots identisch)
-- [ ] Prüfen, welche Mindestversion wir wirklich brauchen (xlsx-`COPY` aus 3.1, `PIVOT`, `fetchmany`) und `setup.py` auf die niedrigste **getestete** Version setzen
-- [ ] Dateiformat der `*_read_data_storage.duckdb` wird von `Apscale_analyze.py` weiterverwendet: prüfen, dass eine mit neuerer Version erzeugte Datei mit der Mindestversion lesbar bleibt, sonst Mindestversion anheben
-- [ ] Commit
-- Nicht geplant: GPU-Erweiterung `gpudb` (Apple Metal / Linux CUDA, kein Windows, siehe Antwort im Chat)
+### 3.8 DuckDB-Version und Hauptversion
+Entscheidung (Nutzer): DuckDB-Mindestversion einfach auf die aktuelle Version setzen, Apscale bekommt dafür eine neue Hauptversion.
+- [x] Suite (52 Tests) und beide echten Datensätze (mit Excel) mit **DuckDB 1.5.6** in isolierter Installation (`pip install --target`, globale Umgebung unverändert): alle Tests grün, `large`/`small` 12/12 Prüfungen, Snapshot **identisch** zu den Läufen mit 1.5.2; Laufzeit unverändert (22,9 s / 3,4 s)
+- [x] `setup.py`: `duckdb>=1.5.6` (vorher `>=1.3.1`, getestet waren nur 1.5.2 und 1.5.6), `version="5.0.0"` (vorher 4.4.0)
+- [ ] Nicht getestet: Streamlit-Seiten (`Apscale_analyze`, Export) mit DuckDB 1.5.6 – sie lesen dieselben Tabellen mit identischem Schema/Inhalt (siehe 3.5), wurden aber nicht gestartet
+- [x] Commit
+- Nicht geplant: GPU-Erweiterung `gpudb` (Apple Metal / Linux CUDA, kein Windows)
 
 ---
 
