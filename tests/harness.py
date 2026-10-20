@@ -116,7 +116,7 @@ def snapshot(project: Path, out_dir: Path) -> dict:
     return info
 
 
-def run(dataset_dir: Path, out_dir: Path, label: str, work_dir: Path) -> None:
+def run(dataset_dir: Path, out_dir: Path, label: str, work_dir: Path, skip_excel: bool = False, cores: int | None = None) -> None:
     from apscale import j_generate_read_table
 
     name = Path(dataset_dir).name
@@ -124,6 +124,20 @@ def run(dataset_dir: Path, out_dir: Path, label: str, work_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     log_path = out_dir / "stdout.log"
+    import pandas as pd
+
+    settings_path = next(project.glob("Settings_*.xlsx"))
+    if cores is not None:
+        import openpyxl
+
+        wb = openpyxl.load_workbook(settings_path)
+        wb["0_general_settings"]["A2"] = cores
+        wb.save(settings_path)
+    cores = int(pd.read_excel(settings_path, sheet_name="0_general_settings")["cores to use"].item())
+    if skip_excel:
+        # Excel writing is slow and not needed for the DuckDB-based comparison. Patched only after
+        # project creation (which needs to_excel). Valid while the module writes Excel through pandas.
+        pd.DataFrame.to_excel = lambda *args, **kwargs: None
     start = time.perf_counter()
     with PeakRss() as rss, open(log_path, "w", encoding="utf-8") as log:
         old_stdout, sys.stdout = sys.stdout, log
@@ -147,6 +161,8 @@ def run(dataset_dir: Path, out_dir: Path, label: str, work_dir: Path) -> None:
     ).stdout.strip()
     metrics = {
         "label": label,
+        "skip_excel": skip_excel,
+        "cores_to_use": cores,
         "dataset": name,
         "git_commit": commit,
         "wall_seconds": round(wall, 2),
@@ -165,6 +181,8 @@ if __name__ == "__main__":
     r.add_argument("dataset_dir", type=Path)
     r.add_argument("out_dir", type=Path)
     r.add_argument("--label", default="unlabelled")
+    r.add_argument("--skip-excel", action="store_true", help="no-op pandas to_excel (timings then not comparable to full runs)")
+    r.add_argument("--cores", type=int, default=None, help="override 'cores to use' in the project settings")
     r.add_argument("--work-dir", type=Path, default=Path("D:/apscale_test_data/work"))
     args = ap.parse_args()
-    run(args.dataset_dir, args.out_dir, args.label, args.work_dir)
+    run(args.dataset_dir, args.out_dir, args.label, args.work_dir, args.skip_excel, args.cores)

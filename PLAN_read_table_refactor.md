@@ -37,11 +37,12 @@ Legende je Schritt: `[ ] Impl` · `[ ] Test` · `[ ] Bench` · `[ ] Commit`
 Problem (reproduziert): bei gleicher Read-Summe ist `sequence_order` pro Lauf zufällig (im Extremtest 200 000 / 200 000 Sequenzen anders). Betrifft vor allem Singletons, die in Amplikondaten sehr häufig sind.
 Lösung: `ORDER BY read_sum DESC, hash ASC`. Der Hash ist inhaltsabhängig und damit unabhängig von Dateireihenfolge, Threads und Parquet-Lesereihenfolge. **vsearch-Vorbild (geprüft in `src/commands/sortbysize.cpp` und der Man-Page von `--sortbysize`/`--cluster_size`):** absteigende Abundanz, bei Gleichstand das Label in alphanumerischer Reihenfolge, zuletzt die Eingabereihenfolge. Unser Label ist der Hash, `ORDER BY read_sum DESC, hash ASC` entspricht also genau der vsearch-Regel (ohne den letzten Fallback, der bei eindeutigen Hashes nie greift). Prüfpunkt: DuckDB-VARCHAR-Vergleich ist byteweise, bei Hex-Hashes identisch zu ASCII-Ordnung.
 Dazu: `sample_idx` per `ORDER BY sample`, `sequence_idx` per `ORDER BY hash` statt `row_number() OVER ()`.
-- [ ] Impl
-- [ ] Test: `build_read_store` 5× mit permutierten Dateinamen/Threadzahlen → identische `sequence_order` je Hash und identisches `group_mapping`
-- [ ] Test: Demo 2.4 zeigt 0 Abweichungen
-- [ ] Bench (nur Sanity: darf nicht merklich langsamer sein)
-- [ ] Commit
+- [x] Impl (zusätzlich Tie-Breaker bei `group_data.sequence_order` und im Log-Sort)
+- [x] Test (groß, ohne Excel): Lauf 1 vs. Lauf 2 vs. Lauf mit `cores to use` = 2 → 0 Abweichungen in allen Tabellen; `sequence_order` entspricht exakt `(read_sum DESC, hash ASC)` für Sequenzen und Gruppen; klein: 2 Läufe (Kerne Standard / 1) identisch
+- [x] Bench: kein Performance-Effekt messbar (siehe Protokoll)
+- [x] Commit
+
+**Neue Referenz ab hier:** `D:pscale_test_data\step_1_1\{large_1,small_1}`. Alle folgenden Schritte (außer 1.2/2.x mit gewollter Ergebnisänderung) müssen exakt diese Snapshots reproduzieren (`tests/compare_runs.py`). Gegenüber `main` geändert: 21 070 `sequence_order`, 35 Gruppenzuordnungen, 24 Repräsentanten (Folge der Tie-Auflösung).
 
 ### 1.2 Hash nach Normalisierung berechnen (Review 2.7)
 `upper().strip()` **vor** `sha3_256`. Hinweis: ändert Hashes nur, wenn Eingaben Kleinbuchstaben/Whitespace enthalten.
@@ -200,5 +201,8 @@ Alle Läufe mit den Standard-Settings aus `create_project` (`cores to use` = CPU
 |---|---|---|---|---|---|---|
 | 0 Baseline `d6bb6fa` | small | 7,4 s / 6,9 s | – | 2,66 GB / 2,64 GB | – | 2 Läufe, Ergebnisse identisch |
 | 0 Baseline `d6bb6fa` | large | 303 s / 307 s | – | 7,0 GB / 7,0 GB | – | 2 Läufe, Ergebnisse **nicht** identisch (s. u.) |
+
+| 1.1 Tie-Breaker | large, `--skip-excel` | 303 s (mit Excel) | 156 s / 151 s / 151 s | 7,0 GB | 6,8 / 6,8 / 4,6 GB | Zeiten nicht vergleichbar (Excel aus); 3. Lauf mit 2 Kernen, gleiches Ergebnis |
+| 1.1 Tie-Breaker | small, `--skip-excel` | 7 s | 4,2 s / 4,8 s | 2,6 GB | – | 2. Lauf mit 1 Kern |
 
 **Befund Baseline large (zwei Läufe von unverändertem `main`):** 21 006 von 27 964 Sequenzen haben ein anderes `sequence_order`, 20 Sequenzen landen in einer anderen Gruppe, 12 Gruppenrepräsentanten unterscheiden sich, 15 Zeilen in `group_read_counts` weichen ab. `read_counts` identisch. Nur 6 965 verschiedene Read-Summen bei 27 964 Sequenzen (viele Ties). → Tie-Bug (Schritt 1.1) ist auf echten Daten nachgewiesen.

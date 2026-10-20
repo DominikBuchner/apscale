@@ -84,7 +84,7 @@ def build_read_store(input_folder, database_path):
     read_data_store.execute("""
         CREATE TABLE main.sample_data AS
         SELECT 
-            row_number() OVER () AS sample_idx,
+            row_number() OVER (ORDER BY sample) AS sample_idx,
             sample,  
         FROM (
             SELECT DISTINCT sample
@@ -96,7 +96,7 @@ def build_read_store(input_folder, database_path):
     read_data_store.execute("""
         CREATE TABLE main.sequence_data AS
         SELECT 
-            row_number() OVER () AS sequence_idx,
+            row_number() OVER (ORDER BY hash, sequence) AS sequence_idx,
             hash,
             sequence,
         FROM (
@@ -134,11 +134,14 @@ def build_read_store(input_folder, database_path):
             read_sum = r.read_sum
         FROM (
             SELECT
-                row_number() OVER (ORDER BY sum(read_count) DESC) AS sequence_order, 
-                sequence_idx, 
-                sum(read_count) AS read_sum
-            FROM sequence_read_count_data
-            GROUP BY sequence_idx  
+                row_number() OVER (
+                    ORDER BY sum(srcd.read_count) DESC, seqd.hash ASC, seqd.sequence ASC
+                ) AS sequence_order, 
+                srcd.sequence_idx, 
+                sum(srcd.read_count) AS read_sum
+            FROM sequence_read_count_data AS srcd
+            JOIN sequence_data AS seqd ON srcd.sequence_idx = seqd.sequence_idx
+            GROUP BY srcd.sequence_idx, seqd.hash, seqd.sequence
         ) r
         WHERE sd.sequence_idx = r.sequence_idx
     """)
@@ -635,7 +638,7 @@ def generate_sequence_groups(
             gdt.sequence_idx,
             sd.hash,
             sd.sequence,
-            row_number() OVER (ORDER BY gdt.read_sum DESC) AS sequence_order,
+            row_number() OVER (ORDER BY gdt.read_sum DESC, sd.hash ASC) AS sequence_order,
             gdt.read_sum
         FROM temp_db.group_data_temp AS gdt
         LEFT JOIN main.sequence_data AS sd
@@ -709,7 +712,7 @@ def write_log(logfile_base_path: str, database_path: str):
             ON gm.sequence_idx = sd.sequence_idx
         LEFT JOIN group_data AS gd
             ON gm.group_idx = gd.sequence_idx
-        ORDER BY gd.sequence_order, sd.read_sum DESC
+        ORDER BY gd.sequence_order, sd.read_sum DESC, sd.hash ASC
         """)
 
     # keep track of the files written to far
