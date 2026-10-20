@@ -181,9 +181,10 @@ Listen → `pyarrow` direkt (falls pyarrow ohnehin Abhängigkeit von pandas/Duck
 
 ### 3.6b joblib-Worker nach dem Einlesen beenden (neu, aus dem Speicherprofil)
 Die loky-Workerprozesse bleiben nach `Parallel(...)` bestehen (wiederverwendbarer Executor) und belegen für den Rest des Laufs ca. 100 MB je Prozess (bei dir 23 Prozesse ≈ 2,4 GB), obwohl sie nur beim Einlesen der FASTA-Dateien gebraucht werden.
-- [ ] Impl: Executor nach dem Einlesen herunterfahren (`get_reusable_executor().shutdown(wait=True)`) oder Parallel mit eigenem Backend-Kontext
-- [ ] Test/Bench: Peak-RSS `large` vor/nach, Ergebnis unverändert
-- [ ] Commit
+- [x] Impl: `convert_fastas_to_parquet()` (ersetzt die zwei duplizierten `Parallel`-Blöcke in `main`) fährt den loky-Executor nach dem Einlesen herunter (`get_reusable_executor().shutdown(wait=True)`)
+- [x] Test: `tests/test_workers.py` (nach der Konvertierung bleiben keine Workerprozesse übrig; nur der kleine joblib-`resource_tracker`, ca. 37 MB, bleibt). Vorher (Reproduktion): Worker leben weiter. Suite 34/34; `large` und `small`: Snapshot unverändert, 12 Prüfungen grün
+- [x] Bench (`large`, mit Excel): Peak-RSS **2,6 GB statt 3,2 GB**; **nach dem Einlesen liegt der Gesamtspeicher bei höchstens 0,8 GB** (vorher 2,7–3,2 GB). Der verbleibende Gipfel von 2,6 GB entsteht während des parallelen Einlesens selbst (23 Prozesse × ca. 100 MB für importierte Bibliotheken); dort würde nur ein schlankerer Worker (3.6: ohne pandas) oder weniger Prozesse helfen
+- [x] Commit
 
 ### 3.7 DuckDB-Konfiguration (Review 7)
 `threads` aus `cores to use`, `memory_limit` (Anteil des freien RAMs), `temp_directory` auf Projekt-Temp, `preserve_insertion_order=false` für große `COPY`.
@@ -230,6 +231,7 @@ Alle Läufe mit den Standard-Settings aus `create_project` (`cores to use` = CPU
 | 2.4 Log | large, mit Excel | 303 s / 307 s | 319 s | 7,0 GB | 7,8 GB | volle Pipeline mit Excel; Abweichung im Rahmen der Messschwankung bzw. Rest-Overhead, nicht untersucht |
 | 3.1 Excel per DuckDB | large, **mit** Excel | 303 s / 307 s | 43 s | 7,0 GB | 7,0 GB | Excel-Schreiben selbst: 6–10× schneller, Speicher −90 % im Prototyp; Gesamtspeicher kommt woanders her |
 | 3.2 Kreuzprodukt entfernen | large, mit Excel | 43 s | 24 s | 7,0 GB | 3,2 GB | Hauptprozess 4,5 GB → 0,74 GB; Rest sind joblib-Worker (3.6b) |
+| 3.6b Worker beenden | large, mit Excel | 24 s | 23 s | 3,2 GB | 2,6 GB | nach dem Einlesen ≤ 0,8 GB; Gipfel nur noch im parallelen Einlesen |
 | 3.3 Gruppierung per `vsearch --cluster_size` | large, `--skip-excel` | 138–156 s | 30 s | 6,8–7,0 GB | 7,0 GB | Gruppierung 110 s → 2 s; Mapping == exhaustiver Referenzlauf |
 | 1.1 Tie-Breaker | small, `--skip-excel` | 7 s | 4,2 s / 4,8 s | 2,6 GB | – | 2. Lauf mit 1 Kern |
 

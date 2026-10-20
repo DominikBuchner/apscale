@@ -1,6 +1,7 @@
 import glob, datetime, gzip, duckdb, hashlib, more_itertools, shutil, subprocess
 import pandas as pd
 from joblib import Parallel, delayed
+from joblib.externals.loky import get_reusable_executor
 from pathlib import Path
 from apscale.a_create_project import choose_input
 from Bio.SeqIO.FastaIO import SimpleFastaParser
@@ -195,6 +196,29 @@ def fasta_to_parquet(fasta_path: str, output_folder: str, perform_hash: bool) ->
     # create an output path, save data to parquet to ingest into duckdb later
     output_path = output_folder.joinpath(f"{fasta_name}.parquet.snappy")
     fasta_data.to_parquet(output_path)
+
+
+def convert_fastas_to_parquet(
+    input_files: list, output_folder: str, perform_hash: bool, cores: int
+) -> None:
+    """Transform all fasta files to parquet files to ingest into duckdb, using several processes.
+
+    The worker processes are shut down afterwards. joblib would keep them alive (with their memory) for the
+    rest of the run, although they are only needed here.
+
+    Args:
+        input_files (list): Paths of the fasta.gz files.
+        output_folder (str): Folder to write the parquet files to.
+        perform_hash (bool): Wether to hash the sequences, see fasta_to_parquet.
+        cores (int): Number of processes to use.
+    """
+    try:
+        Parallel(n_jobs=cores)(
+            delayed(fasta_to_parquet)(fasta_file, output_folder, perform_hash)
+            for fasta_file in input_files
+        )
+    finally:
+        get_reusable_executor().shutdown(wait=True)
 
 
 def build_read_store(input_folder, database_path):
@@ -840,18 +864,9 @@ def main(project=Path.cwd()):
     )
 
     # only perform hashing if no aggregation step has been used before
-    if prior_step == "06_dereplication":
-        # transform all fasta files in input to parquet to ingest into duckdb
-        Parallel(n_jobs=cores)(
-            delayed(fasta_to_parquet)(fasta_file, temp_path, True)
-            for fasta_file in input_files
-        )
-    else:
-        # transform all fasta files in input to parquet to ingest into duckdb
-        Parallel(n_jobs=cores)(
-            delayed(fasta_to_parquet)(fasta_file, temp_path, False)
-            for fasta_file in input_files
-        )
+    convert_fastas_to_parquet(
+        input_files, temp_path, prior_step == "06_dereplication", cores
+    )
 
     # build the duckdb database
     build_read_store(temp_path, database_path)
