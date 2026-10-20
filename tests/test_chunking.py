@@ -1,32 +1,13 @@
 """Chunked parquet pivot must neither duplicate nor lose rows, whatever the physical table order is.
 
-Builds a read data storage from the real small dataset (skipped if it is not available).
+Uses the `storage` fixture (conftest.py).
 """
-import shutil, sys
-from pathlib import Path
+import shutil
 
 import duckdb
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from apscale import j_generate_read_table as j
-
-SMALL = Path("D:/apscale_test_data/small_dataset")
-pytestmark = pytest.mark.skipif(not SMALL.is_dir(), reason="real test data not available")
-
-
-@pytest.fixture(scope="module")
-def storage(tmp_path_factory):
-    root = tmp_path_factory.mktemp("storage")
-    temp, data = root / "temp", root / "data"
-    temp.mkdir(), data.mkdir()
-    for f in SMALL.glob("*.fasta.gz"):
-        j.fasta_to_parquet(str(f), temp, False)
-    db = data / "read_data_storage.duckdb"
-    j.build_read_store(temp, db)
-    j.generate_fasta("t", data, db, "sequence")
-    j.generate_sequence_groups("t", data, db, temp, 0.97)
-    return db
 
 
 @pytest.mark.parametrize("sequence_type", ["sequence", "group"])

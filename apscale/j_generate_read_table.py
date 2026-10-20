@@ -10,6 +10,9 @@ from Bio.SeqIO.FastaIO import SimpleFastaParser
 MAX_PIVOT_CELLS = 25_000_000
 MIN_ROWS_PER_CHUNK = 1000
 
+# rows per logfile, well below the Excel limit of 1,048,575 data rows
+LOG_ROWS_PER_FILE = 200_000
+
 
 def fasta_to_parquet(fasta_path: str, output_folder: str, perform_hash: bool) -> None:
     """Function to stream fasta to parquet as tables in the form of
@@ -702,21 +705,24 @@ def generate_sequence_groups(
 
 
 def write_log(logfile_base_path: str, database_path: str):
-    """Function to log the group mapping.
+    """Function to log the group mapping. Writes one Excel file per LOG_ROWS_PER_FILE rows.
 
     Args:
-        logfile_base_path (str): Path to the logfile to write to.
+        logfile_base_path (str): Path to the folder to write the logfiles to.
         database_path (str): Path to the duckdb database
     """
+    # remove logs of earlier runs, they would be mixed up with the new ones
+    for old_log in Path(logfile_base_path).glob("Logfile_11_read_table_part_*.xlsx"):
+        old_log.unlink()
+
     # connect to the read data store
     read_data_store = duckdb.connect(database_path)
 
-    logfile_cursor = read_data_store.execute(f"""
+    logfile_cursor = read_data_store.execute("""
         SELECT
-            gm.group_idx,
-            sd.hash,
-            gm.sequence_idx,
-            sd.read_sum,
+            gd.hash AS group_hash,
+            sd.hash AS sequence_hash,
+            sd.read_sum
         FROM group_mapping AS gm
         LEFT JOIN sequence_data AS sd
             ON gm.sequence_idx = sd.sequence_idx
@@ -724,23 +730,26 @@ def write_log(logfile_base_path: str, database_path: str):
             ON gm.group_idx = gd.sequence_idx
         ORDER BY gd.sequence_order, sd.read_sum DESC, sd.hash ASC
         """)
-
-    # keep track of the files written to far
-    file_nr = 1
+    columns = [column[0] for column in logfile_cursor.description]
 
     print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing logs.")
 
+    file_nr = 1
     while True:
-        # fetch 100 x 2048 rows for each sub log
-        chunk = logfile_cursor.fetch_df_chunk(100)
-        if chunk.empty:
+        rows = logfile_cursor.fetchmany(LOG_ROWS_PER_FILE)
+        if not rows:
             break
 
-        # generate a logfile name if multiple logs have to be written
+        # generate a logfile name, one file per chunk
         logfile_name = Path(logfile_base_path).joinpath(
             f"Logfile_11_read_table_part_{file_nr}.xlsx"
         )
-        chunk.to_excel(logfile_name, engine="xlsxwriter", index=False)
+        pd.DataFrame(rows, columns=columns).to_excel(
+            logfile_name, engine="xlsxwriter", index=False
+        )
+        file_nr += 1
+
+    read_data_store.close()
 
 
 def main(project=Path.cwd()):

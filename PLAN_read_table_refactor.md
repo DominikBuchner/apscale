@@ -75,9 +75,9 @@ Bereiche über `sequence_order BETWEEN a AND b` (arithmetisch, keine Python-List
 
 ### 2.4 Log-Dateien (Review 2.2)
 `file_nr` erhöhen, alte `Logfile_11_*` vorher löschen, Gruppen-**Hash** statt nur Indizes ausgeben. Schreiben mit DuckDB (siehe 3.1).
-- [ ] Impl
-- [ ] Test: Zeilen im Log == Zeilen in `group_mapping`, bei erzwungen kleinem Chunk mehrere Dateien
-- [ ] Commit
+- [x] Impl: `fetchmany(LOG_ROWS_PER_FILE)` (200 000), `file_nr` wird erhöht, alte `Logfile_11_*` werden vorher gelöscht, Spalten jetzt `group_hash`, `sequence_hash`, `read_sum` (interne Indizes entfernt). Schreiben vorerst noch über pandas/xlsxwriter (Umstellung in 3.1)
+- [x] Test: `tests/test_write_log.py` (mehrere Dateien bei kleinem Limit, Zeilenzahl == `group_mapping`, Zuordnung stimmt mit DB überein, Sortierung, Altdatei wird entfernt). **Vorher** (Demo, 600-fach vervielfachte Zuordnung, 273 600 Zeilen): nur 1 Datei mit 68 800 Zeilen, 204 800 Zeilen verloren. **Nachher:** 200 000 + 73 600 in 2 Dateien. Vollständiger Lauf groß mit Excel: Log 27 964 Zeilen, Snapshot unverändert
+- [x] Commit
 
 ### 2.5 Excel-Spaltenlimit (Review 2.5)
 `chunksize = min(10_000_000 // sequence_count, 16_000)`; ≥ 1 sicherstellen.
@@ -204,6 +204,7 @@ Alle Läufe mit den Standard-Settings aus `create_project` (`cores to use` = CPU
 | 0 Baseline `d6bb6fa` | large | 303 s / 307 s | – | 7,0 GB / 7,0 GB | – | 2 Läufe, Ergebnisse **nicht** identisch (s. u.) |
 
 | 1.1 Tie-Breaker | large, `--skip-excel` | 303 s (mit Excel) | 156 s / 151 s / 151 s | 7,0 GB | 6,8 / 6,8 / 4,6 GB | Zeiten nicht vergleichbar (Excel aus); 3. Lauf mit 2 Kernen, gleiches Ergebnis |
+| 2.4 Log | large, mit Excel | 303 s / 307 s | 319 s | 7,0 GB | 7,8 GB | volle Pipeline mit Excel; Abweichung im Rahmen der Messschwankung bzw. Rest-Overhead, nicht untersucht |
 | 1.1 Tie-Breaker | small, `--skip-excel` | 7 s | 4,2 s / 4,8 s | 2,6 GB | – | 2. Lauf mit 1 Kern |
 
 **Befund Baseline large (zwei Läufe von unverändertem `main`):** 21 006 von 27 964 Sequenzen haben ein anderes `sequence_order`, 20 Sequenzen landen in einer anderen Gruppe, 12 Gruppenrepräsentanten unterscheiden sich, 15 Zeilen in `group_read_counts` weichen ab. `read_counts` identisch. Nur 6 965 verschiedene Read-Summen bei 27 964 Sequenzen (viele Ties). → Tie-Bug (Schritt 1.1) ist auf echten Daten nachgewiesen.
