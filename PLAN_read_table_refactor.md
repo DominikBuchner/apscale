@@ -148,6 +148,8 @@ Vorschlag (statt Python-Schleife): `generate_sequence_groups` schreibt `hash;siz
 - [x] Neue Referenz-Snapshots: `D:pscale_test_data\step_3_3\{large,small}`; ab hier gegen diese vergleichen
 - [x] Commit
 
+**Nachtrag Memory (vsearch selbst, `tests/experiments/vsearch_memory.py`, synthetisch skalierte Daten):** Peak-RSS des vsearch-Prozesses bei 28k / 100k Sequenzen: neu (`cluster_size`) 54 / 154 MB, alt (`usearch_global` alle gegen alle) 61 / 156 MB, also etwa linear und kein Vorteil für die alte Variante; die alte DuckDB-Schleife war nur beim Zusammenführen speichersicher, nicht beim vsearch-Lauf. Der 300k-Lauf wurde abgebrochen (Frage beantwortet). Offen/optional: `--maxaccepts 100` statt `0` war bei 100k gut dreimal schneller (8,8 s statt 28,9 s); Gleichheit der Ergebnisse noch **nicht** geprüft, daher bisher bei `0`.
+
 ### 3.4 Parquet nach `sequence_order`-Bereichen schreiben (Review 3.4)
 Jeder Chunk joint Hash/Sequenz selbst und schreibt in Reihenfolge; kein globaler `ORDER BY` über breite Zeilen mehr. Dateien werden danach in Reihenfolge zu einer Ausgabedatei zusammengeführt (Reihenfolgetest!).
 - [ ] Impl
