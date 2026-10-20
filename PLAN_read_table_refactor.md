@@ -173,11 +173,11 @@ Jeder Chunk joint Hash/Sequenz selbst und schreibt in Reihenfolge; kein globaler
 - [ ] Commit
 
 ### 3.6 `fasta_to_parquet` ohne pandas (Review 3.6)
-Listen → `pyarrow` direkt (falls pyarrow ohnehin Abhängigkeit von pandas/DuckDB ist; sonst DuckDB `from_arrow`/`executemany` prüfen).
-- [ ] Impl
-- [ ] Test: Parquet-Inhalt identisch
-- [ ] Bench
-- [ ] Commit
+Befund aus der Messung: Ein Workerprozess lädt alle Importe des Moduls der Funktion. pandas kostet ca. 40 MB, Bio ca. 21 MB, duckdb ca. 15 MB (Baseline Python 16 MB). Deshalb eigenes, schlankes Modul statt nur pandas in der Funktion zu ersetzen.
+- [x] Impl: neues Modul `apscale/j_fasta_to_parquet.py` (nur `gzip`, `hashlib`, `pyarrow`): eigener kleiner FASTA-Leser statt `Bio.SeqIO.FastaIO.SimpleFastaParser`, Tabelle direkt als Arrow-Table (`string`, `string`, `string`, `int64`) mit `snappy`; `j_generate_read_table` importiert die Funktion von dort (Name bleibt verfügbar). Der alte pandas-Code liegt als Orakel in `tests/oracle_fasta_to_parquet.py`
+- [x] Test: `tests/test_fasta_parity.py` (14 Fälle: einzeilig, mehrzeilig, Kleinbuchstaben/Leerzeichen, Leerzeilen, Windows-Zeilenenden, leere Datei, mit/ohne Hashing, Punkt im Samplenamen; plus alle 400 echten Dateien von `small_dataset`): Spaltennamen, Typen und Zeilen identisch zur pandas-Version. Suite 48/48; `large`/`small`: Snapshot unverändert, 12 Prüfungen grün
+- [x] Bench: Worker-Importe 108 → **40 MB** je Prozess; Peak-RSS `large` (mit Excel) **2,1 GB statt 2,6 GB**, Laufzeit 22 s
+- [x] Commit
 
 ### 3.6b joblib-Worker nach dem Einlesen beenden (neu, aus dem Speicherprofil)
 Die loky-Workerprozesse bleiben nach `Parallel(...)` bestehen (wiederverwendbarer Executor) und belegen für den Rest des Laufs ca. 100 MB je Prozess (bei dir 23 Prozesse ≈ 2,4 GB), obwohl sie nur beim Einlesen der FASTA-Dateien gebraucht werden.
@@ -232,6 +232,7 @@ Alle Läufe mit den Standard-Settings aus `create_project` (`cores to use` = CPU
 | 3.1 Excel per DuckDB | large, **mit** Excel | 303 s / 307 s | 43 s | 7,0 GB | 7,0 GB | Excel-Schreiben selbst: 6–10× schneller, Speicher −90 % im Prototyp; Gesamtspeicher kommt woanders her |
 | 3.2 Kreuzprodukt entfernen | large, mit Excel | 43 s | 24 s | 7,0 GB | 3,2 GB | Hauptprozess 4,5 GB → 0,74 GB; Rest sind joblib-Worker (3.6b) |
 | 3.6b Worker beenden | large, mit Excel | 24 s | 23 s | 3,2 GB | 2,6 GB | nach dem Einlesen ≤ 0,8 GB; Gipfel nur noch im parallelen Einlesen |
+| 3.6 Schlanker Worker | large, mit Excel | 23 s | 22 s | 2,6 GB | 2,1 GB | Worker-Importe 108 → 40 MB |
 | 3.3 Gruppierung per `vsearch --cluster_size` | large, `--skip-excel` | 138–156 s | 30 s | 6,8–7,0 GB | 7,0 GB | Gruppierung 110 s → 2 s; Mapping == exhaustiver Referenzlauf |
 | 1.1 Tie-Breaker | small, `--skip-excel` | 7 s | 4,2 s / 4,8 s | 2,6 GB | – | 2. Lauf mit 1 Kern |
 

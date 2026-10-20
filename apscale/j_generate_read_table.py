@@ -1,10 +1,10 @@
-import glob, datetime, gzip, duckdb, hashlib, more_itertools, shutil, subprocess
+import glob, datetime, duckdb, more_itertools, shutil, subprocess
 import pandas as pd
 from joblib import Parallel, delayed
 from joblib.externals.loky import get_reusable_executor
 from pathlib import Path
 from apscale.a_create_project import choose_input
-from Bio.SeqIO.FastaIO import SimpleFastaParser
+from apscale.j_fasta_to_parquet import fasta_to_parquet
 
 # chunking of the parquet pivot, ~25M cells is reasonable for a 32 Gb machine
 MAX_PIVOT_CELLS = 25_000_000
@@ -144,58 +144,6 @@ def remove_old_read_tables(
         for pattern in (f"{base}_part_*.xlsx", f"{base}.parquet.snappy"):
             for old_file in Path(output_folder).glob(pattern):
                 old_file.unlink()
-
-
-def fasta_to_parquet(fasta_path: str, output_folder: str, perform_hash: bool) -> None:
-    """Function to stream fasta to parquet as tables in the form of
-    [header, sequence, count]
-
-    Args:
-        fasta_path (str): Path to the fasta file to transform.
-        output_folder (str): Output folder to write to
-        perform_hash (bool): Wether to hash the sequences prior to parquet generation. Needed if no data aggregation step is used!
-    """
-    # extract the sample name from the fasta_path
-    fasta_name = Path(fasta_path).with_suffix("").stem
-
-    # read the fasta with the simple fasta parser to generate rows
-    all_rows = []
-
-    # add a dummy seq to each file to handle empty files greacefully
-    all_rows.append([fasta_name, "dummy_hash", "dummy_seq", 0])
-
-    with gzip.open(fasta_path, "rt") as data_stream:
-        for header, seq in SimpleFastaParser(data_stream):
-            header_data = header.split(";size=")
-            seq_hash, seq_count = header_data[0], int(header_data[1].rstrip(";"))
-
-            # normalize first, so that the hash does not depend on case or whitespace
-            seq = seq.upper().strip()
-
-            # only compute hash if needed
-            if perform_hash:
-                seq_hash = hashlib.sha3_256(seq.encode("ascii")).hexdigest()
-
-            all_rows.append([fasta_name, seq_hash, seq, seq_count])
-
-    # put into pandas dataframe
-    fasta_data = pd.DataFrame(
-        data=all_rows, columns=["sample", "hash", "sequence", "read_count"]
-    )
-
-    # add correct datatype annotations
-    fasta_data = fasta_data.astype(
-        {
-            "sample": "string",
-            "hash": "string",
-            "sequence": "string",
-            "read_count": "int64",
-        }
-    )
-
-    # create an output path, save data to parquet to ingest into duckdb later
-    output_path = output_folder.joinpath(f"{fasta_name}.parquet.snappy")
-    fasta_data.to_parquet(output_path)
 
 
 def convert_fastas_to_parquet(
