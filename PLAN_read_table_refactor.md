@@ -57,9 +57,9 @@ Dazu: `sample_idx` per `ORDER BY sample`, `sequence_idx` per `ORDER BY hash` sta
 
 ### 2.1 Gruppen-Parquet nutzt `sequence_data` (Review 2.1)
 Reproduziert: Demo mit 4 Seqs / 3 Gruppen liefert 4 Zeilen, Zeile des Gruppenmitglieds ist NULL. Fix: überall `{sequence_type}_data` (Z. 371, 425), `sequence_ids` ebenfalls.
-- [ ] Impl
-- [ ] Test: Zeilenzahl Parquet == `COUNT(*)` aus `group_data`; Summe je Sample == Summe aus `*_read_count_data`; keine NULLs
-- [ ] Commit
+- [x] Impl (`sequence_ids`-Abfrage und finaler `FROM` nutzen `{sequence_type}_data`)
+- [x] Test: `tests/check_read_tables.py <run_dir>` prüft Zeilenzahl, Zeilenreihenfolge == `sequence_order`, keine NULLs, Read-Summe je Sample. **Vorher** (echte Daten, groß): Gruppen-Parquet 27 964 statt 6 485 Zeilen, 21 479 Zeilen mit NULL. **Nachher:** alle 8 Prüfungen grün auf groß und klein; Snapshot unverändert gegenüber `step_1_1`
+- [x] Commit
 
 ### 2.2 Zählertyp `HUGEINT` → `BIGINT` (Review 2.6)
 Betrifft auch `group_data.read_sum` (im Demo bereits `210.0`). `::BIGINT` bei allen `SUM(...)`.

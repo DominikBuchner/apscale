@@ -372,7 +372,7 @@ def generate_read_table(
 
     # collect the sequence ids
     sequence_ids = read_data_store.execute(
-        "SELECT sequence_idx FROM main.sequence_data"
+        f"SELECT sequence_idx FROM main.{sequence_type}_data"
     ).fetchall()
     sequence_ids = [row[0] for row in sequence_ids]
     sequence_chunks = more_itertools.chunked(sequence_ids, max_rows_per_chunk)
@@ -426,7 +426,7 @@ def generate_read_table(
                 sd.hash,
                 sd.sequence,
                 {sample_columns}
-            FROM main.sequence_data AS sd
+            FROM main.{sequence_type}_data AS sd
             LEFT JOIN temp_db.pivot AS pt
                 ON sd.sequence_idx = pt.sequence_idx
             WHERE sd.sequence != 'dummy_seq'
