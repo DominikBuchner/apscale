@@ -81,9 +81,9 @@ Bereiche über `sequence_order BETWEEN a AND b` (arithmetisch, keine Python-List
 
 ### 2.5 Excel-Spaltenlimit (Review 2.5)
 `chunksize = min(10_000_000 // sequence_count, 16_000)`; ≥ 1 sicherstellen.
-- [ ] Impl
-- [ ] Test: 20 000 Samples × 5 Seqs → mehrere Dateien, je ≤ 16 384 Spalten
-- [ ] Commit
+- [x] Impl: `chunksize = max(1, min(EXCEL_MAX_CELLS // sequence_count, EXCEL_MAX_COLUMNS - 2))` (Konstanten am Modulanfang). Zeilenlimit-Schwelle (1 000 000) bewusst unverändert
+- [x] Test: `tests/test_excel_limits.py` (synthetisch, 17 000 Samples × 3 Sequenzen, dort ohne echte Daten möglich). **Vorher:** `ValueError: This sheet is too large! Your sheet size is: 3, 17002 Max sheet size is: 1048576, 16384` – der ganze Lauf bricht ab, auch das Parquet entsteht nicht mehr. **Nachher:** ≥ 2 Teile, je ≤ 16 384 Spalten, alle Samples genau einmal vorhanden. Groß: Snapshot und 12 Prüfungen unverändert
+- [x] Commit
 
 ### 2.6 Samplenamen: Quoting und Kollisionen (Review 2.9)
 Helper `quote_ident()` / `quote_literal()` für alle SQL-Stellen. Frühzeitiger, klarer Fehler bei Namen, die case-insensitiv kollidieren oder `hash`/`sequence` heißen.

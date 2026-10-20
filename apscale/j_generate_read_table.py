@@ -13,6 +13,10 @@ MIN_ROWS_PER_CHUNK = 1000
 # rows per logfile, well below the Excel limit of 1,048,575 data rows
 LOG_ROWS_PER_FILE = 200_000
 
+# Excel limits: columns per sheet (hash and sequence take two of them) and cells per file (memory)
+EXCEL_MAX_COLUMNS = 16_384
+EXCEL_MAX_CELLS = 10_000_000
+
 
 def fasta_to_parquet(fasta_path: str, output_folder: str, perform_hash: bool) -> None:
     """Function to stream fasta to parquet as tables in the form of
@@ -295,8 +299,10 @@ def generate_read_table(
             f"{datetime.datetime.now().strftime('%H:%M:%S')}: Generating table(s) for Excel output."
         )
 
-        # compute the maximum number of samples per file
-        chunksize = 10_000_000 // sequence_count
+        # compute the maximum number of samples per file, respect the column limit of Excel
+        chunksize = max(
+            1, min(EXCEL_MAX_CELLS // sequence_count, EXCEL_MAX_COLUMNS - 2)
+        )
 
         # fetch the sample names from read store
         sample_names_iter = enumerate(more_itertools.chunked(sample_names, n=chunksize))
