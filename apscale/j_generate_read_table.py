@@ -58,6 +58,24 @@ def check_sample_names(sample_names: list) -> None:
         )
 
 
+def remove_old_read_tables(
+    output_folder: str, project_name: str, sequence_type: str = None
+) -> None:
+    """Remove read tables (Excel parts and parquet) of earlier runs, so they are not mixed up with new ones.
+
+    Args:
+        output_folder (str): Folder the read tables are written to.
+        project_name (str): Name of the apscale project.
+        sequence_type (str, optional): Only remove "sequence" or "group" tables. Defaults to both.
+    """
+    sequence_or_group = {"sequence": 0, "group": 1}
+    for seq_type in [sequence_type] if sequence_type else sequence_or_group:
+        base = f"{sequence_or_group[seq_type]}_{glob.escape(project_name)}_{seq_type}_read_table"
+        for pattern in (f"{base}_part_*.xlsx", f"{base}.parquet.snappy"):
+            for old_file in Path(output_folder).glob(pattern):
+                old_file.unlink()
+
+
 def fasta_to_parquet(fasta_path: str, output_folder: str, perform_hash: bool) -> None:
     """Function to stream fasta to parquet as tables in the form of
     [header, sequence, count]
@@ -285,6 +303,9 @@ def generate_read_table(
     temp_db = Path(temp_folder).joinpath("temp.duckdb")
     read_data_store.execute(f"ATTACH {quote_literal(temp_db)} as temp_db")
     sequence_or_group = {"sequence": 0, "group": 1}
+
+    # remove read tables of earlier runs, a run with fewer parts would leave old ones behind
+    remove_old_read_tables(output_folder, project_name, sequence_type)
 
     # gather some basic stats about the read store
     # extract the number of sequences, includes the dummy_seq as it is removed after pivot
@@ -862,6 +883,9 @@ def main(project=Path.cwd()):
     # check if there is an old db, remove it if it is
     if database_path.is_file():
         database_path.unlink()
+
+    # remove read tables of earlier runs, they would be stale if read table generation is switched off
+    remove_old_read_tables(data_path, project_name)
 
     # check if there are old parquet files, remove them
     for file in temp_path.glob("*.parquet.snappy"):

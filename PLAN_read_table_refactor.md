@@ -93,9 +93,9 @@ Helper `quote_ident()` / `quote_literal()` für alle SQL-Stellen. Frühzeitiger,
 
 ### 2.7 Alte Ausgaben aufräumen (Review 2.10)
 Vor dem Schreiben `*_read_table_part_*.xlsx`, Parquet und `Logfile_11_*` des Projekts löschen.
-- [ ] Impl
-- [ ] Test: Lauf mit 3 Teilen, danach Lauf mit 1 Teil → nur 1 Teil übrig
-- [ ] Commit
+- [x] Impl: `remove_old_read_tables(folder, project_name, sequence_type=None)` löscht `*_read_table_part_*.xlsx` und `*_read_table.parquet.snappy` des Projekts; Aufruf am Anfang von `generate_read_table` (für den jeweiligen Typ) und in `main` für beide Typen (auch wenn „generate read table“ ausgeschaltet ist). Das Log wird seit 2.4 in `write_log` bereinigt
+- [x] Test: `tests/test_stale_outputs.py` (4 Teile → danach 1 Teil: **vorher** blieben `part_1..3` liegen, **nachher** nur `part_0`; fremde Dateien bleiben unberührt; Parquet und beide Typen). End-to-end: `main` auf `small_dataset` mit abgelegten Alt-Dateien (Excel-Teil, Parquet, Log) → alle weg bzw. überschrieben. Suite 18/18, groß: Snapshot unverändert
+- [x] Commit
 
 ### 2.8 Eingaben und Fehlerbehandlung in `main` (Review 2.12, 2.13)
 Keine `*.fasta.gz` → klare Meldung und Abbruch; ungültiger Schwellenwert → Exception bzw. Exit-Code ≠ 0; `mkdir(parents=True, exist_ok=True)`; Temp-Aufräumen robust (`shutil.rmtree(..., ignore_errors=True)`).
