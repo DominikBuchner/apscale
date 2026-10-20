@@ -84,6 +84,49 @@ def write_excel(connection, query: str, output_file: str) -> None:
     )
 
 
+def pivot_query(
+    sequence_type: str, samples: list, min_idx: int = None, max_idx: int = None
+) -> str:
+    """SQL to pivot the sparse read counts to one column per sample. Sequences without reads in any of the
+    samples have no row, missing counts of other sequences are NULL.
+
+    Args:
+        sequence_type (str): Wether to pivot sequence or group data.
+        samples (list): Sample names, one column each.
+        min_idx (int, optional): First sequence_idx to include. Defaults to all.
+        max_idx (int, optional): Last sequence_idx to include. Defaults to all.
+
+    Returns:
+        str: SELECT statement returning sequence_idx and the sample columns.
+    """
+    selector = ", ".join(quote_literal(sample) for sample in samples)
+    columns = ", ".join(quote_ident(sample) for sample in samples)
+    idx_filter = (
+        f"AND rcd.sequence_idx BETWEEN {min_idx} AND {max_idx}"
+        if min_idx is not None
+        else ""
+    )
+    return f"""
+        SELECT sequence_idx, {columns}
+        FROM (
+            SELECT rcd.sequence_idx, sd.sample, rcd.read_count
+            FROM main.{sequence_type}_read_count_data AS rcd
+            JOIN main.sample_data AS sd
+                ON rcd.sample_idx = sd.sample_idx
+            WHERE sd.sample IN ({selector}) {idx_filter}
+        )
+        PIVOT (SUM(read_count)::BIGINT FOR sample IN ({selector}))
+        """
+
+
+def zero_filled_columns(samples: list, table_alias: str = "pt") -> str:
+    """SELECT list with one column per sample where NULL (no reads) becomes 0."""
+    return ", ".join(
+        f"COALESCE({table_alias}.{quote_ident(sample)}, 0)::BIGINT AS {quote_ident(sample)}"
+        for sample in samples
+    )
+
+
 def remove_old_read_tables(
     output_folder: str, project_name: str, sequence_type: str = None
 ) -> None:
@@ -345,37 +388,6 @@ def generate_read_table(
     sample_names = [row[0] for row in sample_names]
     check_sample_names(sample_names)
 
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Building cross product of samples and sequences."
-    )
-
-    # build the cross product first
-    read_data_store.execute(f"""
-        CREATE OR REPLACE TABLE temp_db.cross_product AS
-            SELECT
-                seqd.sequence_idx,
-                sd.sample_idx,
-                sd.sample,
-            FROM
-                main.{sequence_type}_data AS seqd
-            CROSS JOIN main.sample_data AS sd                    
-        """)
-
-    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Joining in read counts.")
-
-    read_data_store.execute(f"""
-    CREATE OR REPLACE TABLE temp_db.read_table_data AS
-        SELECT
-            cp.sequence_idx,
-            cp.sample_idx,
-            cp.sample,
-            COALESCE(rcd.read_count, 0) as read_count
-        FROM temp_db.cross_product AS cp
-        LEFT JOIN main.{sequence_type}_read_count_data AS rcd
-            ON cp.sequence_idx = rcd.sequence_idx
-            AND cp.sample_idx = rcd.sample_idx
-    """)
-
     # if excel is used as output format compute the maximum samples per excel
     if sequence_count > 1_000_000:
         print(
@@ -396,39 +408,18 @@ def generate_read_table(
 
         # for each chunk create a pivot table and stream it directly to excel
         for idx, chunk in sample_names_iter:
-            sample_selector = ", ".join(quote_literal(sample) for sample in chunk)
-            sample_columns = ", ".join(quote_ident(sample) for sample in chunk)
-
-            # select the subset of samples we are currently looking at
-            read_data_store.execute(f"""
-                CREATE OR REPLACE TABLE temp_db.filtered AS  
-                    SELECT * FROM temp_db.read_table_data rtd
-                    WHERE rtd.sample IN ({sample_selector})
-                """)
-
-            print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table.")
-
-            read_data_store.execute(f"""
-                CREATE OR REPLACE TABLE temp_db.pivot AS
-                    SELECT sequence_idx, {sample_columns}
-                    FROM (
-                        SELECT sequence_idx, sample, read_count
-                        FROM temp_db.filtered
-                    )
-                    PIVOT (SUM(read_count)::BIGINT FOR sample IN ({sample_columns}))
-                """)
-
             print(
-                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes, sequences and ordering table."
+                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table, adding hashes and sequences."
             )
 
+            # pivot the sparse read counts of this chunk of samples, missing counts are zeros
             read_table_query = f"""
                 SELECT
                     sd.hash,
                     sd.sequence,
-                    {sample_columns}
+                    {zero_filled_columns(chunk)}
                 FROM main.{sequence_type}_data AS sd
-                LEFT JOIN temp_db.pivot AS pt
+                LEFT JOIN ({pivot_query(sequence_type, chunk)}) AS pt
                     ON sd.sequence_idx = pt.sequence_idx
                 WHERE sd.sequence != 'dummy_seq'
                 ORDER BY sd.sequence_order
@@ -460,10 +451,6 @@ def generate_read_table(
         )
     )
 
-    # create a sql friendly sample columns variable
-    sample_columns = ", ".join(quote_ident(sample) for sample in sample_names)
-    sample_selector = ", ".join(quote_literal(sample) for sample in sample_names)
-
     print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table.")
 
     # chunk the data
@@ -491,15 +478,7 @@ def generate_read_table(
 
         # perform the pivot for this chunk
         read_data_store.execute(f"""
-            COPY (
-                SELECT sequence_idx, {sample_columns}
-                FROM (
-                    SELECT sequence_idx, sample, read_count
-                    FROM temp_db.read_table_data
-                    WHERE sequence_idx BETWEEN {min_idx} AND {max_idx}
-                )
-                PIVOT (SUM(read_count)::BIGINT FOR sample IN ({sample_selector}))
-            )
+            COPY ({pivot_query(sequence_type, sample_names, min_idx, max_idx)})
             TO {quote_literal(temp_filename)} (FORMAT PARQUET)
             """)
 
@@ -530,7 +509,7 @@ def generate_read_table(
             SELECT
                 sd.hash,
                 sd.sequence,
-                {sample_columns}
+                {zero_filled_columns(sample_names)}
             FROM main.{sequence_type}_data AS sd
             LEFT JOIN temp_db.pivot AS pt
                 ON sd.sequence_idx = pt.sequence_idx

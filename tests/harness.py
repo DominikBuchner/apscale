@@ -25,21 +25,27 @@ class PeakRss:
 
     def __init__(self, interval: float = 0.1):
         self.interval, self.peak, self._stop = interval, 0, threading.Event()
+        self.timeline = []  # (epoch seconds, total rss, rss of this process, number of child processes)
         self._proc = psutil.Process()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def _run(self):
         while not self._stop.is_set():
-            total = 0
+            total, own, n_children = 0, 0, 0
             try:
-                for p in [self._proc] + self._proc.children(recursive=True):
+                children = self._proc.children(recursive=True)
+                n_children = len(children)
+                for p in [self._proc] + children:
                     try:
-                        total += p.memory_info().rss
+                        rss = p.memory_info().rss
+                        total += rss
+                        own = rss if p is self._proc else own
                     except psutil.Error:
                         pass
             except psutil.Error:
                 pass
             self.peak = max(self.peak, total)
+            self.timeline.append((time.time(), total, own, n_children))
             time.sleep(self.interval)
 
     def __enter__(self):
@@ -169,6 +175,9 @@ def run(dataset_dir: Path, out_dir: Path, label: str, work_dir: Path, skip_excel
         "snapshot_rows": counts,
         "produced_files": sorted(str(p.relative_to(produced)) for p in produced.rglob("*") if p.is_file()),
     }
+    with open(out_dir / "memory_timeline.csv", "w") as f:
+        f.write("epoch,total_rss,main_rss,children\n")
+        f.writelines(f"{e:.2f},{a},{b},{c}\n" for e, a, b, c in rss.timeline)
     (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     print(json.dumps(metrics, indent=2))
 

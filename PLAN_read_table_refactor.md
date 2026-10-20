@@ -134,10 +134,11 @@ Keine `*.fasta.gz` → klare Meldung und Abbruch; ungültiger Schwellenwert → 
 ### 3.2 Kreuzprodukt entfernen (Review 3.2)
 Pivot direkt auf der sparsen `*_read_count_data`, Nullen per `COALESCE(col, 0)` nach dem Pivot. `cross_product`, `read_table_data`, `filtered`, `pivot` als Tabellen entfallen. Excel-Teile filtern auf `sample_idx`-Bereiche.
 Memory: nur DuckDB-intern (spillt), nichts in Python.
-- [ ] Impl
-- [ ] Test: Ausgabe identisch zu Baseline (Nullen statt NULL)
-- [ ] Bench: Laufzeit, Peak-RSS, **Plattenverbrauch des Temp-Ordners**
-- [ ] Commit
+- [x] Impl: `pivot_query()` pivotiert direkt die sparse `*_read_count_data` (Excel-Teile: pro Sample-Chunk als Unterabfrage ohne Zwischentabellen; Parquet: pro `sequence_idx`-Bereich), `zero_filled_columns()` setzt fehlende Werte per `COALESCE(..., 0)::BIGINT`. Entfernt: `cross_product`, `read_table_data`, `filtered`
+- [x] Test: Suite 33/33; `large`: beide Parquet-Read-Tabellen **zellgleich** zu Schritt 3.1 (0 Zeilen Unterschied in beide Richtungen), Excel == Parquet weiterhin getestet, Snapshot unverändert, 12 Prüfungen grün
+- [x] Bench (`large`, mit Excel): **24 s statt 43 s**, Peak-RSS **3,2 GB statt 7,0 GB**, Hauptprozess maximal 744 MB (vorher 4,5 GB). Speicherprofil nach Phasen mit `tests/phase_memory.py`
+- [x] Befund aus dem Profil: **die restlichen ca. 2,4 GB sind 23 joblib-Workerprozesse** (loky), die nach `fasta_to_parquet` weiterleben (siehe 3.6b)
+- [x] Commit
 
 ### 3.3 Gruppierung: eigene O(N²)-Schleife ersetzen (Review 3.1)
 **Neuer Befund aus dem Vergleich mit dem vsearch-Quellcode (`src/core/cluster.cpp`) und einem Test auf den echten Daten:**
@@ -176,6 +177,12 @@ Listen → `pyarrow` direkt (falls pyarrow ohnehin Abhängigkeit von pandas/Duck
 - [ ] Impl
 - [ ] Test: Parquet-Inhalt identisch
 - [ ] Bench
+- [ ] Commit
+
+### 3.6b joblib-Worker nach dem Einlesen beenden (neu, aus dem Speicherprofil)
+Die loky-Workerprozesse bleiben nach `Parallel(...)` bestehen (wiederverwendbarer Executor) und belegen für den Rest des Laufs ca. 100 MB je Prozess (bei dir 23 Prozesse ≈ 2,4 GB), obwohl sie nur beim Einlesen der FASTA-Dateien gebraucht werden.
+- [ ] Impl: Executor nach dem Einlesen herunterfahren (`get_reusable_executor().shutdown(wait=True)`) oder Parallel mit eigenem Backend-Kontext
+- [ ] Test/Bench: Peak-RSS `large` vor/nach, Ergebnis unverändert
 - [ ] Commit
 
 ### 3.7 DuckDB-Konfiguration (Review 7)
@@ -222,6 +229,7 @@ Alle Läufe mit den Standard-Settings aus `create_project` (`cores to use` = CPU
 | 1.1 Tie-Breaker | large, `--skip-excel` | 303 s (mit Excel) | 156 s / 151 s / 151 s | 7,0 GB | 6,8 / 6,8 / 4,6 GB | Zeiten nicht vergleichbar (Excel aus); 3. Lauf mit 2 Kernen, gleiches Ergebnis |
 | 2.4 Log | large, mit Excel | 303 s / 307 s | 319 s | 7,0 GB | 7,8 GB | volle Pipeline mit Excel; Abweichung im Rahmen der Messschwankung bzw. Rest-Overhead, nicht untersucht |
 | 3.1 Excel per DuckDB | large, **mit** Excel | 303 s / 307 s | 43 s | 7,0 GB | 7,0 GB | Excel-Schreiben selbst: 6–10× schneller, Speicher −90 % im Prototyp; Gesamtspeicher kommt woanders her |
+| 3.2 Kreuzprodukt entfernen | large, mit Excel | 43 s | 24 s | 7,0 GB | 3,2 GB | Hauptprozess 4,5 GB → 0,74 GB; Rest sind joblib-Worker (3.6b) |
 | 3.3 Gruppierung per `vsearch --cluster_size` | large, `--skip-excel` | 138–156 s | 30 s | 6,8–7,0 GB | 7,0 GB | Gruppierung 110 s → 2 s; Mapping == exhaustiver Referenzlauf |
 | 1.1 Tie-Breaker | small, `--skip-excel` | 7 s | 4,2 s / 4,8 s | 2,6 GB | – | 2. Lauf mit 1 Kern |
 
