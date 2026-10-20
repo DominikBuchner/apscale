@@ -1,4 +1,4 @@
-import glob, datetime, duckdb, more_itertools, shutil, subprocess
+import glob, datetime, duckdb, more_itertools, psutil, shutil, subprocess
 import pandas as pd
 from joblib import Parallel, delayed
 from joblib.externals.loky import get_reusable_executor
@@ -21,8 +21,47 @@ EXCEL_MAX_CELLS = 10_000_000
 # additional vsearch options for the sequence grouping, e.g. for experiments
 VSEARCH_EXTRA_ARGS = []
 
+# resources, set from the general settings ("cores to use") in main. None: use all cores / the default share of the RAM
+CORES = None
+DUCKDB_MEMORY_LIMIT = None
+DUCKDB_RAM_SHARE = 0.5  # DuckDB would use 80 % of the RAM by default, leave room for vsearch and other programs
+DUCKDB_MB_PER_THREAD = 256  # working memory per thread; measured: 1 GB works with 4 threads, fails with 15 (Excel export of 639 sample columns)
+
 # names that would collide with the columns of the read tables
 RESERVED_COLUMN_NAMES = {"hash", "sequence", "sequence_idx"}
+
+
+def duckdb_memory_limit_mb(connection) -> float:
+    """Memory limit of a DuckDB connection in MB, as reported by DuckDB (e.g. '953.6 MiB')."""
+    value, unit = connection.execute("SELECT current_setting('memory_limit')").fetchone()[0].split()
+    factors = {"KiB": 2**10, "MiB": 2**20, "GiB": 2**30, "TiB": 2**40, "KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12, "bytes": 1}
+    return float(value) * factors[unit] / 2**20
+
+
+def connect_database(database_path: Path, temp_directory: Path = None):
+    """Connect to a duckdb database with limited resources. Data that does not fit into the memory limit is
+    spilled to the temp directory instead of using more memory.
+
+    Args:
+        database_path (Path): Path to the duckdb database.
+        temp_directory (Path, optional): Folder for spilled data. Defaults to a folder next to the database.
+
+    Returns:
+        The duckdb connection.
+    """
+    connection = duckdb.connect(str(database_path))
+    memory_limit = DUCKDB_MEMORY_LIMIT or (
+        f"{int(psutil.virtual_memory().total * DUCKDB_RAM_SHARE / 1e6)}MB"
+    )
+    connection.execute(f"SET memory_limit = {quote_literal(memory_limit)}")
+
+    # more threads than the memory limit can feed run out of memory instead of spilling to disk
+    limit_mb = duckdb_memory_limit_mb(connection)
+    threads = min(CORES or psutil.cpu_count(), max(1, int(limit_mb // DUCKDB_MB_PER_THREAD)))
+    connection.execute(f"SET threads = {threads}")
+    if temp_directory is not None:
+        connection.execute(f"SET temp_directory = {quote_literal(temp_directory)}")
+    return connection
 
 
 def log(message: str) -> None:
@@ -186,7 +225,7 @@ def build_read_store(input_folder: Path, database_path: Path) -> None:
     parquet_path = input_folder.joinpath("*.parquet.snappy")
 
     # connect to the database
-    read_data_store = duckdb.connect(database_path)
+    read_data_store = connect_database(database_path, input_folder)
 
     # attach a temp database to the read_data_store
     temp_database = input_folder.joinpath("sequence_read_count_data.duckdb")
@@ -297,7 +336,7 @@ def generate_fasta(
         sequence_type (str): Wether to write sequence or group
     """
     # establish the connection to the database
-    read_data_store = duckdb.connect(database_path)
+    read_data_store = connect_database(database_path)
     read_data_store_cursor = read_data_store.execute(
         f"SELECT hash, sequence FROM {sequence_type}_data WHERE sequence != 'dummy_seq' ORDER BY sequence_order"
     )
@@ -337,7 +376,7 @@ def generate_read_table(
     """
     output_folder, temp_folder = Path(output_folder), Path(temp_folder)
     # connect the database
-    read_data_store = duckdb.connect(database_path)
+    read_data_store = connect_database(database_path, temp_folder)
     # define the temporal database for writing intermediate steps
     temp_db = Path(temp_folder).joinpath("temp.duckdb")
     read_data_store.execute(f"ATTACH {quote_literal(temp_db)} as temp_db")
@@ -504,7 +543,7 @@ def generate_sequence_groups(
     cluster_fasta = Path(temp_path).joinpath(f"{project_name}_cluster_input.fasta")
     uc_path = Path(temp_path).joinpath(f"{project_name}_{group_threshold}_clusters.uc")
 
-    read_data_store = duckdb.connect(database_path)
+    read_data_store = connect_database(database_path, temp_path)
     temp_db = Path(temp_path).joinpath("temp.duckdb")
     read_data_store.execute(f"ATTACH {quote_literal(temp_db)} as temp_db")
 
@@ -556,6 +595,7 @@ def generate_sequence_groups(
                     str(uc_path),
                     "--quiet",
                 ]
+                + (["--threads", str(CORES)] if CORES else [])
                 + VSEARCH_EXTRA_ARGS,
                 capture_output=True,
                 text=True,
@@ -679,7 +719,7 @@ def write_log(logfile_base_path: Path, database_path: Path):
         old_log.unlink()
 
     # connect to the read data store
-    read_data_store = duckdb.connect(database_path)
+    read_data_store = connect_database(database_path)
 
     # number the log rows once, so that the files can be cut into fixed ranges
     read_data_store.execute("""
@@ -733,7 +773,11 @@ def main(project: Path = None):
         ),
         sheet_name="0_general_settings",
     )
-    cores = gen_settings["cores to use"].item()
+    cores = int(gen_settings["cores to use"].item())
+
+    # DuckDB and vsearch use the same number of cores as the file conversion
+    global CORES
+    CORES = cores
 
     # collect the settings from the excel sheet
     settings = pd.read_excel(

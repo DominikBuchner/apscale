@@ -158,12 +158,9 @@ Vorschlag (statt Python-Schleife): `generate_sequence_groups` schreibt `hash;siz
 
 **Nachtrag Memory (vsearch selbst, `tests/experiments/vsearch_memory.py`, synthetisch skalierte Daten):** Peak-RSS des vsearch-Prozesses bei 28k / 100k Sequenzen: neu (`cluster_size`) 54 / 154 MB, alt (`usearch_global` alle gegen alle) 61 / 156 MB, also etwa linear und kein Vorteil für die alte Variante; die alte DuckDB-Schleife war nur beim Zusammenführen speichersicher, nicht beim vsearch-Lauf. Der 300k-Lauf wurde abgebrochen (Frage beantwortet). Offen/optional: `--maxaccepts 100` statt `0` war bei 100k gut dreimal schneller (8,8 s statt 28,9 s); Gleichheit der Ergebnisse noch **nicht** geprüft, daher bisher bei `0`.
 
-### 3.4 Parquet nach `sequence_order`-Bereichen schreiben (Review 3.4)
-Jeder Chunk joint Hash/Sequenz selbst und schreibt in Reihenfolge; kein globaler `ORDER BY` über breite Zeilen mehr. Dateien werden danach in Reihenfolge zu einer Ausgabedatei zusammengeführt (Reihenfolgetest!).
-- [ ] Impl
-- [ ] Test: identisch zu Baseline inkl. Zeilenreihenfolge
-- [ ] Bench: Laufzeit, Peak-RSS
-- [ ] Commit
+### 3.4 Parquet nach `sequence_order`-Bereichen schreiben (Review 3.4) – **nicht umgesetzt**
+Gemessen am skalierten Datensatz (300 000 Sequenzen × 200 Samples, 1,05 Mio. Einträge, 22 Kerne): der globale `ORDER BY` im Parquet-Schritt kostet 7 s und 1,9 GB Spitze im Hauptprozess, im Gruppen-Schritt 4 s / 1,6 GB. DuckDB sortiert bei Platzmangel auf Platte. Kein gemessener Bedarf für den größeren Umbau (Reihenfolgeprobleme bei zusammengeführten Chunk-Dateien) → bewusst weggelassen; erneut prüfen, falls ein Datensatz mit > 3 Mio. Sequenzen Probleme macht.
+- [x] Entscheidung: nicht umsetzen (Messung `step_scaled/before_3_4`: 442 s gesamt, davon 260 s vsearch, 165 s Excel, Peak-RSS 2,5 GB nur während des parallelen Einlesens)
 
 ### 3.5 `build_read_store` schlanker (Review 3.5)
 - [x] Impl: `sequence_data` entsteht in **einem** `CREATE TABLE AS` mit Aggregation (`sequence_idx`, `hash`, `sequence`, `sequence_order`, `read_sum`), kein `ALTER` + `UPDATE` mehr; der Join der Read Counts läuft nur noch über `hash` (kurzer String) statt `hash AND sequence`; vorher Prüfung, dass jeder Hash genau eine Sequenz hat (sonst `ValueError` mit Beispielen). Verworfen: `sample_idx` schon in Python vergeben (nur 639 kurze Namen, kein messbarer Vorteil)
@@ -186,10 +183,10 @@ Die loky-Workerprozesse bleiben nach `Parallel(...)` bestehen (wiederverwendbare
 - [x] Commit
 
 ### 3.7 DuckDB-Konfiguration (Review 7)
-`threads` aus `cores to use`, `memory_limit` (Anteil des freien RAMs), `temp_directory` auf Projekt-Temp, `preserve_insertion_order=false` für große `COPY`.
-- [ ] Impl
-- [ ] Bench: große Daten mit künstlich kleinem `memory_limit` laufen durch (Spill-Test)
-- [ ] Commit
+- [x] Impl: `connect_database()` für alle Verbindungen: `memory_limit` = 50 % des Arbeitsspeichers (`DUCKDB_RAM_SHARE`, DuckDB-Standard wären 80 %), `temp_directory` im Temp-Ordner des Projekts (Spill-Dateien werden mit dem Ordner entfernt), `threads` = Einstellung „cores to use“, aber höchstens `Speicherlimit / 256 MB`. vsearch bekommt ebenfalls `--threads` aus „cores to use“ (Ergebnis ist unabhängig von der Threadzahl, getestet). `preserve_insertion_order=false` bewusst **nicht** gesetzt (nicht gemessen, Reihenfolge ist Teil des Ergebnisses)
+- [x] Test: `tests/test_duckdb_resources.py` (Limit, Threads, Spill-Ordner, Deckelung, Standard = Anteil am RAM), Suite grün
+- [x] Spill-/Limit-Test auf `large` (28k Sequenzen × 639 Samples) mit künstlichen Limits, Ergebnis jeweils vollständig identisch (12/12 Prüfungen, 0 Snapshot-Unterschiede): **≥ 1,5 GB laufen mit allen Kernen; 1 GB nur mit ≤ 4 Threads (bei 15 Threads Out of Memory); 600 MB und 150 MB: Out of Memory** auch mit 2 Threads. Befund: Excel-Export und Pivot mit vielen Spalten (639) halten Arbeitsspeicher pro Thread und können nicht beliebig auf Platte ausweichen; das Limit schützt also nur oberhalb von ca. 1 GB (bei dieser Probenzahl). Mit dem Standard (50 % RAM, Threads durch `Limit / 256 MB` gedeckelt) läuft `large` auf jedem Rechner ab ca. 3 GB RAM
+- [x] Commit
 
 ### 3.8 DuckDB-Version (ganz am Ende der Performance-Phase)
 Aktuell: `setup.py` verlangt `duckdb>=1.3.1`, getestet wird nur mit 1.5.2 (PyPI: 1.5.6). Bewusst **nicht mitten in den Umbau**, damit Benchmarks nicht durch Versionswechsel verfälscht werden.

@@ -122,7 +122,7 @@ def snapshot(project: Path, out_dir: Path) -> dict:
     return info
 
 
-def run(dataset_dir: Path, out_dir: Path, label: str, work_dir: Path, skip_excel: bool = False, cores: int | None = None) -> None:
+def run(dataset_dir: Path, out_dir: Path, label: str, work_dir: Path, skip_excel: bool = False, cores: int | None = None, duckdb_memory: str | None = None) -> None:
     from apscale import j_generate_read_table
 
     name = Path(dataset_dir).name
@@ -140,6 +140,8 @@ def run(dataset_dir: Path, out_dir: Path, label: str, work_dir: Path, skip_excel
         wb["0_general_settings"]["A2"] = cores
         wb.save(settings_path)
     cores = int(pd.read_excel(settings_path, sheet_name="0_general_settings")["cores to use"].item())
+    if duckdb_memory:
+        j_generate_read_table.DUCKDB_MEMORY_LIMIT = duckdb_memory
     if skip_excel:
         # Excel writing is not needed for the DuckDB-based comparison and slows the run down.
         j_generate_read_table.write_excel = lambda *args, **kwargs: None
@@ -168,6 +170,7 @@ def run(dataset_dir: Path, out_dir: Path, label: str, work_dir: Path, skip_excel
         "label": label,
         "skip_excel": skip_excel,
         "cores_to_use": cores,
+        "duckdb_memory": duckdb_memory,
         "dataset": name,
         "git_commit": commit,
         "wall_seconds": round(wall, 2),
@@ -190,7 +193,8 @@ if __name__ == "__main__":
     r.add_argument("out_dir", type=Path)
     r.add_argument("--label", default="unlabelled")
     r.add_argument("--skip-excel", action="store_true", help="do not write Excel files (timings then not comparable to full runs)")
+    r.add_argument("--duckdb-memory", default=None, help="memory limit for DuckDB, e.g. 1GB (default: share of the RAM)")
     r.add_argument("--cores", type=int, default=None, help="override 'cores to use' in the project settings")
     r.add_argument("--work-dir", type=Path, default=Path("D:/apscale_test_data/work"))
     args = ap.parse_args()
-    run(args.dataset_dir, args.out_dir, args.label, args.work_dir, args.skip_excel, args.cores)
+    run(args.dataset_dir, args.out_dir, args.label, args.work_dir, args.skip_excel, args.cores, args.duckdb_memory)
