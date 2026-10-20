@@ -6,6 +6,10 @@ from pathlib import Path
 from apscale.a_create_project import choose_input
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 
+# chunking of the parquet pivot, ~25M cells is reasonable for a 32 Gb machine
+MAX_PIVOT_CELLS = 25_000_000
+MIN_ROWS_PER_CHUNK = 1000
+
 
 def fasta_to_parquet(fasta_path: str, output_folder: str, perform_hash: bool) -> None:
     """Function to stream fasta to parquet as tables in the form of
@@ -367,19 +371,24 @@ def generate_read_table(
     print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table.")
 
     # chunk the data
-    max_pivot_cells = 25_000_000  # reasonable for a 32 Gb machine
-    max_rows_per_chunk = max(1000, max_pivot_cells // len(sample_names))
+    max_rows_per_chunk = max(MIN_ROWS_PER_CHUNK, MAX_PIVOT_CELLS // len(sample_names))
 
-    # collect the sequence ids
-    sequence_ids = read_data_store.execute(
-        f"SELECT sequence_idx FROM main.{sequence_type}_data"
-    ).fetchall()
-    sequence_ids = [row[0] for row in sequence_ids]
-    sequence_chunks = more_itertools.chunked(sequence_ids, max_rows_per_chunk)
+    # split the sequence_idx range into non-overlapping chunks of max_rows_per_chunk rows,
+    # independent of the physical row order of the table
+    chunk_ranges = read_data_store.execute(f"""
+        SELECT min(sequence_idx), max(sequence_idx)
+        FROM (
+            SELECT
+                sequence_idx,
+                (row_number() OVER (ORDER BY sequence_idx) - 1) // {max_rows_per_chunk} AS chunk
+            FROM main.{sequence_type}_data
+        )
+        GROUP BY chunk
+        ORDER BY chunk
+        """).fetchall()
 
     # write output to parquet in chunks
-    for i, chunk in enumerate(sequence_chunks, start=1):
-        min_idx, max_idx = min(chunk), max(chunk)
+    for i, (min_idx, max_idx) in enumerate(chunk_ranges, start=1):
 
         # create a temp filename for output
         temp_filename = Path(temp_folder.joinpath(f"pivot_chunk_{i}.parquet.snappy"))

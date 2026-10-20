@@ -69,9 +69,9 @@ Betrifft auch `group_data.read_sum` (im Demo bereits `210.0`). `::BIGINT` bei al
 
 ### 2.3 Chunking ohne Sortierlücke (Review 2.3)
 Bereiche über `sequence_order BETWEEN a AND b` (arithmetisch, keine Python-Liste aller IDs). Wird mit 3.4 zusammen sauber, kann aber vorab einzeln gefixt werden, falls 3.4 später kommt.
-- [ ] Impl
-- [ ] Test: Anzahl Zeilen == Anzahl Sequenzen, keine Duplikate, bei absichtlich vertauschter Tabellenreihenfolge
-- [ ] Commit
+- [x] Impl: Chunk-Bereiche per SQL (`row_number() OVER (ORDER BY sequence_idx) // Chunkgröße` → min/max je Chunk), keine Python-Liste mehr; Chunkgrößen als Modulkonstanten `MAX_PIVOT_CELLS`/`MIN_ROWS_PER_CHUNK` (Verhalten unverändert, testbar)
+- [x] Test: `tests/test_chunking.py` (reale `small_dataset`, erzwungen 7 Zeilen pro Chunk, Sequenzen/Gruppen × Tabelle unvertauscht/vertauscht). **Vorher:** 3 von 4 Fällen rot, u. a. 1 503 statt 120 Zeilen bei den Gruppen **ohne** Vertauschen (`group_data` ist durch `GROUP BY` nicht nach `sequence_idx` sortiert), 22 227 statt 456 bei vertauschten Sequenzen. **Nachher:** 4/4 grün; groß: 12 Prüfungen grün, Snapshot unverändert
+- [x] Commit
 
 ### 2.4 Log-Dateien (Review 2.2)
 `file_nr` erhöhen, alte `Logfile_11_*` vorher löschen, Gruppen-**Hash** statt nur Indizes ausgeben. Schreiben mit DuckDB (siehe 3.1).
