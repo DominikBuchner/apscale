@@ -1,7 +1,6 @@
 import glob, datetime, gzip, duckdb, hashlib, more_itertools, shutil, subprocess
 import pandas as pd
 from joblib import Parallel, delayed
-from tqdm import tqdm
 from pathlib import Path
 from apscale.a_create_project import choose_input
 from Bio.SeqIO.FastaIO import SimpleFastaParser
@@ -539,181 +538,109 @@ def generate_sequence_groups(
         temp_path (str): Path to save temporary products.
         group_threshold (float): Threshold to perform the grouping with.
     """
-    # create the savename for the sequence fasta
-    sequence_fasta = Path(data_path).joinpath(f"0_{project_name}_sequences.fasta")
-    matchfile_path = Path(temp_path).joinpath(
-        f"{project_name}_{group_threshold}_matchfile.tsv"
-    )
+    cluster_fasta = Path(temp_path).joinpath(f"{project_name}_cluster_input.fasta")
+    uc_path = Path(temp_path).joinpath(f"{project_name}_{group_threshold}_clusters.uc")
 
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Computing matchfile with vsearch."
-    )
-
-    # compute the matchfile with vsearch
-    try:
-        result = subprocess.run(
-            [
-                "vsearch",
-                "--usearch_global",
-                str(sequence_fasta),
-                "--db",
-                str(sequence_fasta),
-                "--id",
-                str(group_threshold),
-                "--userout",
-                str(matchfile_path),
-                "--quiet",
-                "--userfields",
-                "query+target+id",
-                "--maxaccepts",
-                str(0),
-                "--self",
-            ]
-            + VSEARCH_EXTRA_ARGS,
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        raise RuntimeError(
-            "vsearch was not found. Please install vsearch and make sure it is available in the PATH."
-        ) from None
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"vsearch failed with exit code {result.returncode}: {result.stderr.strip()}"
-        )
-
-    # ingest into duck db temp file to then join in data
     read_data_store = duckdb.connect(database_path)
     temp_db = Path(temp_path).joinpath("temp.duckdb")
     read_data_store.execute(f"ATTACH {quote_literal(temp_db)} as temp_db")
-    read_data_store.execute(f"""
-        CREATE OR REPLACE TABLE temp_db.matchfile_temp AS
-        SELECT * FROM read_csv({quote_literal(matchfile_path)},
-            delim = '\\t',
-            header = False,
-            columns = {{
-                'query': 'STRING',
-                'target': 'STRING',
-                'pct_id': 'DOUBLE'
-            }})
-        """)
 
-    # add sequence_idx and order to the table and save in main table
-    read_data_store.execute(f"""
-    CREATE OR REPLACE TABLE temp_db.group_lookup_table AS
-        SELECT 
-            mt.query,
-            mt.target,
-            mt.pct_id,
-            sd_query.sequence_idx AS query_idx,
-            sd_query.sequence_order AS query_order,
-            sd_target.sequence_idx AS target_idx,
-            sd_target.sequence_order AS target_order
-        FROM temp_db.matchfile_temp AS mt
-        LEFT JOIN main.sequence_data AS sd_query
-            ON mt.query = sd_query.hash
-        LEFT JOIN main.sequence_data AS sd_target
-            ON mt.target = sd_target.hash
-    """)
+    # the hash is the label of the sequence in vsearch, it has to be unique
+    nr_of_sequences, nr_of_hashes = read_data_store.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT hash) FROM main.sequence_data WHERE sequence != 'dummy_seq'"
+    ).fetchone()
+    if nr_of_sequences != nr_of_hashes:
+        raise ValueError(
+            f"Sequence hashes are not unique ({nr_of_sequences - nr_of_hashes} duplicates), sequences cannot be grouped."
+        )
 
-    # fetch the number of rows in the sequence data
-    nr_of_sequences = (
-        read_data_store.execute("SELECT COUNT(*) FROM main.sequence_data").fetchone()[0]
-        - 1
-    )
-
-    # fetch the ordered sequence data to loop over
-    sequence_data = read_data_store.execute(f"""
-        SELECT * FROM main.sequence_data AS sd
-        WHERE sd.hash != 'dummy_hash'
-        ORDER BY sd.sequence_order
-        """)
-
-    # flag to use the first sequence always as the first group
-    first = True
-
-    # open a second connection for the grouping operations
-    grouping_connection = duckdb.connect(database_path)
-
-    # create a temporary csv for pushing out the group mappings
-    mapping_csv_path = temp_path.joinpath(f"{project_name}_group_mapping.csv")
-
-    with open(mapping_csv_path, "w") as mapping_csv:
-        # give user output
-        sequence_counter = 0
-        with tqdm(total=nr_of_sequences, desc="Grouping sequences") as pbar:
+    if nr_of_sequences == 0:
+        # nothing to group, keep the table layout
+        read_data_store.execute(
+            "CREATE OR REPLACE TABLE main.group_mapping (sequence_idx BIGINT, group_idx BIGINT)"
+        )
+    else:
+        # vsearch sorts by size (descending) and label, the same order as sequence_order. The sizes have to be the summed reads
+        cursor = read_data_store.execute(
+            "SELECT hash, sequence, read_sum FROM main.sequence_data WHERE sequence != 'dummy_seq' ORDER BY sequence_order"
+        )
+        with open(cluster_fasta, "w") as out_stream:
             while True:
-                chunk = sequence_data.fetch_df_chunk()
-                # stop when finished
-                if chunk.empty:
+                batch = cursor.fetchmany(100_000)
+                if not batch:
                     break
-                # perform the sequence grouping
-                for (
-                    sequence_idx,
-                    hash,
-                    sequence,
-                    sequence_order,
-                    read_sum,
-                ) in chunk.itertuples(index=False):
-                    # extract the matches for this sequence_idx
-                    all_hash_matches = grouping_connection.execute(
-                        f"SELECT * FROM temp_db.group_lookup_table WHERE query_idx = {sequence_idx}"
-                    ).df()
+                out_stream.writelines(
+                    [f">{hash};size={read_sum}\n{sequence}\n" for hash, sequence, read_sum in batch]
+                )
 
-                    # if it is the first hit, write it to the groups found table
-                    if first:
-                        first = False
-                        # add this to the groups found table since it is by definition the first group found
-                        grouping_connection.execute(f"""
-                            CREATE OR REPLACE TABLE temp_db.groups_found AS
-                            SELECT
-                                CAST(query AS VARCHAR) AS query,
-                                CAST(target AS VARCHAR) AS target,
-                                pct_id,
-                                query_idx,
-                                query_order,
-                                target_idx,
-                                target_order
-                            FROM all_hash_matches
-                            """)
+        print(
+            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Clustering sequences with vsearch."
+        )
 
-                        mapping_csv.write(f"{sequence_idx}\t{sequence_idx}\n")
-                        sequence_counter += 1
-                        pbar.update(1)
-                        continue
+        # greedy, abundance based clustering (AGC): a sequence joins the most abundant centroid it is similar to
+        try:
+            result = subprocess.run(
+                [
+                    "vsearch",
+                    "--cluster_size",
+                    str(cluster_fasta),
+                    "--id",
+                    str(group_threshold),
+                    "--sizeorder",
+                    "--maxaccepts",
+                    str(0),
+                    "--minseqlength",
+                    str(1),
+                    "--uc",
+                    str(uc_path),
+                    "--quiet",
+                ]
+                + VSEARCH_EXTRA_ARGS,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            raise RuntimeError(
+                "vsearch was not found. Please install vsearch and make sure it is available in the PATH."
+            ) from None
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"vsearch failed with exit code {result.returncode}: {result.stderr.strip()}"
+            )
 
-                    # perform the actual grouping, select all potential matches for the current hash
-                    target_matches = grouping_connection.execute(f"""
-                        SELECT * FROM temp_db.groups_found sgf 
-                        WHERE sgf.target_idx = {sequence_idx}
-                        ORDER BY sgf.query_order LIMIT 1
-                        """).df()
-                    # if there is not matching group, add the sequence and all target to the groups found --> it forms a new group
-                    if target_matches.empty:
-                        grouping_connection.execute(f"""
-                            INSERT INTO temp_db.groups_found SELECT * FROM all_hash_matches
-                            """)
-                        mapping_csv.write(f"{sequence_idx}\t{sequence_idx}\n")
-                        sequence_counter += 1
-                        pbar.update(1)
-                    # if there is a matching group it can be added to this group
-                    else:
-                        group_idx = target_matches["query_idx"].item()
-                        mapping_csv.write(f"{sequence_idx}\t{group_idx}\n")
-                        sequence_counter += 1
-                        pbar.update(1)
+        # the uc file has one S (centroid) or H (member of a centroid) line per sequence, labels are hash;size=n
+        label = "regexp_replace({}, ';size=[0-9]+;?$', '')"
+        read_data_store.execute(f"""
+            CREATE OR REPLACE TABLE main.group_mapping AS
+            SELECT
+                member.sequence_idx AS sequence_idx,
+                centroid.sequence_idx AS group_idx
+            FROM (
+                SELECT
+                    {label.format("c8")} AS member_hash,
+                    {label.format("CASE WHEN c0 = 'S' THEN c8 ELSE c9 END")} AS centroid_hash
+                FROM read_csv({quote_literal(uc_path)},
+                    delim = '\t',
+                    header = False,
+                    quote = '',
+                    columns = {{
+                        'c0': 'VARCHAR', 'c1': 'VARCHAR', 'c2': 'VARCHAR', 'c3': 'VARCHAR', 'c4': 'VARCHAR',
+                        'c5': 'VARCHAR', 'c6': 'VARCHAR', 'c7': 'VARCHAR', 'c8': 'VARCHAR', 'c9': 'VARCHAR'
+                    }})
+                WHERE c0 IN ('S', 'H')
+            ) AS uc
+            JOIN main.sequence_data AS member ON uc.member_hash = member.hash
+            JOIN main.sequence_data AS centroid ON uc.centroid_hash = centroid.hash
+            ORDER BY member.sequence_idx
+            """)
 
-    # add the group mapping to the main db
-    read_data_store.execute(f"""
-        CREATE OR REPLACE TABLE main.group_mapping AS
-        SELECT * FROM read_csv({quote_literal(mapping_csv_path)},
-        delim = '\\t',
-        header = False,
-        columns = {{
-            'sequence_idx': 'BIGINT',
-            'group_idx': 'BIGINT'
-        }})                  
-        """)
+        nr_mapped = read_data_store.execute(
+            "SELECT COUNT(*) FROM main.group_mapping"
+        ).fetchone()[0]
+        if nr_mapped != nr_of_sequences:
+            raise RuntimeError(
+                f"vsearch assigned {nr_mapped} of {nr_of_sequences} sequences to a group."
+            )
 
     # add readcounts, merge the groups
     read_data_store.execute(f"""
@@ -774,17 +701,11 @@ def generate_sequence_groups(
     """)
 
     read_data_store.close()
-    grouping_connection.close()
 
     # remove files no longer needed
-    if temp_db.is_file():
-        temp_db.unlink()
-
-    if matchfile_path.is_file():
-        matchfile_path.unlink()
-
-    if mapping_csv_path.is_file():
-        mapping_csv_path.unlink()
+    for file in (temp_db, cluster_fasta, uc_path):
+        if file.is_file():
+            file.unlink()
 
 
 def write_log(logfile_base_path: str, database_path: str):

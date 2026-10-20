@@ -140,13 +140,13 @@ Memory: nur DuckDB-intern (spillt), nichts in Python.
 - Gegenüber dem heutigen Stand ändert das 441 Zuordnungen und 15 Gruppen (die heute verpassten Treffer). **Das ist eine Ergebnisänderung und braucht eine Freigabe.**
 
 Vorschlag (statt Python-Schleife): `generate_sequence_groups` schreibt `hash;size=read_sum` als FASTA, ruft `vsearch --cluster_size ... --uc` auf, liest die `.uc` (Typ `S` = Zentroid, `H` = Mitglied) per DuckDB und baut `group_mapping` daraus. Entfällt: Matchfile, `group_lookup_table`, `groups_found`, Python-Schleife, tqdm. Memory: O(Sequenzen) in vsearch, nichts in Python.
-- [ ] Freigabe der Ergebnisänderung (441 Zuordnungen / −15 Gruppen auf `large`)
-- [ ] Alte Implementierung (nach 1.1) als Test-Orakel in `tests/` sichern, mit `--maxrejects 0` ist sie das Referenzergebnis
-- [ ] Impl
-- [ ] Test: neues Mapping == Orakel mit exhaustiver Suche (groß und klein), thread-unabhängig, Randfälle (Sequenz ohne Treffer, leere Samples)
-- [ ] Bench: Laufzeit und Peak-RSS bei groß; skaliertes Dataset für > 100k Sequenzen
-- [ ] Neue Referenz-Snapshots schreiben, Unterschiede zu `step_1_1` dokumentieren
-- [ ] Commit
+- [x] Freigabe der Ergebnisänderung (Nutzer: „Mir scheint es sinnvoll die vsearch-Variante nachzubauen“; Mapping Sequenz → OTU bleibt erhalten)
+- [x] Alte Implementierung als Test-Orakel gesichert: `tests/oracle_grouping.py` (All-vs-all, `--maxrejects 0`)
+- [x] Impl: `generate_sequence_groups` schreibt `hash;size=read_sum` als FASTA, ruft **einmal** `vsearch --cluster_size --sizeorder --maxaccepts 0 --minseqlength 1 --uc` auf (maxrejects Standard 32) und baut `group_mapping` aus der `.uc` (`S` = Zentroid, `H` = Mitglied). Prüfungen: Hashes eindeutig, jede Sequenz im Mapping, leere Eingabe. `--minseqlength 1`, damit vsearch keine kurzen Sequenzen stillschweigend verwirft. Entfernt: Matchfile, `group_lookup_table`, `groups_found`, Python-Schleife, `tqdm`
+- [x] Test: `tests/test_grouping.py` (neues Mapping == Orakel bei Schwelle 0.97 und 0.9, Threadzahl 1 vs. 3 identisch, Konsistenz der Gruppentabellen, Einzelsequenz, leere Eingabe), Suite 31/31. **Echte Daten `large`:** neues Mapping == erschöpfender Referenzlauf des alten Verfahrens (**0 Abweichungen**, 6 470 Gruppen); gegenüber `step_1_1` wie angekündigt 441 Sequenzen / −15 Gruppen
+- [x] Bench (`large`, ohne Excel, gesamte Pipeline): **ca. 30 s statt 138–156 s**, Gruppierung selbst ca. 2 s statt ca. 110 s. Peak-RSS unverändert 7,0 GB (kommt aus anderen Schritten, siehe 3.1/3.2)
+- [x] Neue Referenz-Snapshots: `D:pscale_test_data\step_3_3\{large,small}`; ab hier gegen diese vergleichen
+- [x] Commit
 
 ### 3.4 Parquet nach `sequence_order`-Bereichen schreiben (Review 3.4)
 Jeder Chunk joint Hash/Sequenz selbst und schreibt in Reihenfolge; kein globaler `ORDER BY` über breite Zeilen mehr. Dateien werden danach in Reihenfolge zu einer Ausgabedatei zusammengeführt (Reihenfolgetest!).
@@ -212,6 +212,7 @@ Alle Läufe mit den Standard-Settings aus `create_project` (`cores to use` = CPU
 
 | 1.1 Tie-Breaker | large, `--skip-excel` | 303 s (mit Excel) | 156 s / 151 s / 151 s | 7,0 GB | 6,8 / 6,8 / 4,6 GB | Zeiten nicht vergleichbar (Excel aus); 3. Lauf mit 2 Kernen, gleiches Ergebnis |
 | 2.4 Log | large, mit Excel | 303 s / 307 s | 319 s | 7,0 GB | 7,8 GB | volle Pipeline mit Excel; Abweichung im Rahmen der Messschwankung bzw. Rest-Overhead, nicht untersucht |
+| 3.3 Gruppierung per `vsearch --cluster_size` | large, `--skip-excel` | 138–156 s | 30 s | 6,8–7,0 GB | 7,0 GB | Gruppierung 110 s → 2 s; Mapping == exhaustiver Referenzlauf |
 | 1.1 Tie-Breaker | small, `--skip-excel` | 7 s | 4,2 s / 4,8 s | 2,6 GB | – | 2. Lauf mit 1 Kern |
 
 **Befund Baseline large (zwei Läufe von unverändertem `main`):** 21 006 von 27 964 Sequenzen haben ein anderes `sequence_order`, 20 Sequenzen landen in einer anderen Gruppe, 12 Gruppenrepräsentanten unterscheiden sich, 15 Zeilen in `group_read_counts` weichen ab. `read_counts` identisch. Nur 6 965 verschiedene Read-Summen bei 27 964 Sequenzen (viele Ties). → Tie-Bug (Schritt 1.1) ist auf echten Daten nachgewiesen.
