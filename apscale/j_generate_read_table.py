@@ -18,6 +18,46 @@ EXCEL_MAX_COLUMNS = 16_384
 EXCEL_MAX_CELLS = 10_000_000
 
 
+# names that would collide with the columns of the read tables
+RESERVED_COLUMN_NAMES = {"hash", "sequence", "sequence_idx"}
+
+
+def quote_literal(value) -> str:
+    """Quote a string (e.g. a path or sample name) as SQL string literal."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def quote_ident(name: str) -> str:
+    """Quote a name as SQL identifier (e.g. a sample name used as column name)."""
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def check_sample_names(sample_names: list) -> None:
+    """Sample names become column names in the read tables. DuckDB column names are case insensitive and
+    must not collide with the fixed columns, so fail early with a readable message.
+
+    Args:
+        sample_names (list): Sample names to check.
+
+    Raises:
+        ValueError: If names differ only in case or use a reserved column name.
+    """
+    reserved = sorted(n for n in sample_names if str(n).lower() in RESERVED_COLUMN_NAMES)
+    if reserved:
+        raise ValueError(
+            f"Sample names {reserved} are reserved column names ({sorted(RESERVED_COLUMN_NAMES)}, any case). Please rename the files."
+        )
+
+    seen = {}
+    for name in sample_names:
+        seen.setdefault(str(name).lower(), []).append(name)
+    clashes = sorted(names for names in seen.values() if len(names) > 1)
+    if clashes:
+        raise ValueError(
+            f"Sample names that differ only in case cannot be told apart in the read tables (case insensitive): {clashes}. Please rename the files."
+        )
+
+
 def fasta_to_parquet(fasta_path: str, output_folder: str, perform_hash: bool) -> None:
     """Function to stream fasta to parquet as tables in the form of
     [header, sequence, count]
@@ -79,7 +119,7 @@ def build_read_store(input_folder, database_path):
 
     # attach a temp database to the read_data_store
     temp_database = input_folder.joinpath("sequence_read_count_data.duckdb")
-    read_data_store.execute(f"ATTACH '{temp_database}' AS temp_db")
+    read_data_store.execute(f"ATTACH {quote_literal(temp_database)} AS temp_db")
 
     # add the readcounts from the parquet file to the table sequence_read_count_data
     read_data_store.execute(f"""
@@ -89,7 +129,7 @@ def build_read_store(input_folder, database_path):
             CAST(hash AS VARCHAR) AS hash,
             CAST(sequence AS VARCHAR) AS sequence,
             read_count
-        FROM read_parquet('{parquet_path}')
+        FROM read_parquet({quote_literal(parquet_path)})
         """)
 
     # add the sample data table
@@ -243,7 +283,7 @@ def generate_read_table(
     read_data_store = duckdb.connect(database_path)
     # define the temporal database for writing intermediate steps
     temp_db = Path(temp_folder).joinpath("temp.duckdb")
-    read_data_store.execute(f"ATTACH '{temp_db}' as temp_db")
+    read_data_store.execute(f"ATTACH {quote_literal(temp_db)} as temp_db")
     sequence_or_group = {"sequence": 0, "group": 1}
 
     # gather some basic stats about the read store
@@ -257,6 +297,7 @@ def generate_read_table(
         "SELECT DISTINCT sample FROM main.sample_data ORDER BY sample ASC"
     ).fetchall()
     sample_names = [row[0] for row in sample_names]
+    check_sample_names(sample_names)
 
     print(
         f"{datetime.datetime.now().strftime('%H:%M:%S')}: Building cross product of samples and sequences."
@@ -309,8 +350,8 @@ def generate_read_table(
 
         # for each chunk create a pivot table and stream it directly to excel
         for idx, chunk in sample_names_iter:
-            sample_selector = ", ".join(f"'{sample}'" for sample in chunk)
-            sample_columns = ", ".join(f'"{sample}"' for sample in chunk)
+            sample_selector = ", ".join(quote_literal(sample) for sample in chunk)
+            sample_columns = ", ".join(quote_ident(sample) for sample in chunk)
 
             # select the subset of samples we are currently looking at
             read_data_store.execute(f"""
@@ -374,8 +415,8 @@ def generate_read_table(
     )
 
     # create a sql friendly sample columns variable
-    sample_columns = ", ".join(f'"{sample}"' for sample in sample_names)
-    sample_selector = ", ".join(f"'{sample}'" for sample in sample_names)
+    sample_columns = ", ".join(quote_ident(sample) for sample in sample_names)
+    sample_selector = ", ".join(quote_literal(sample) for sample in sample_names)
 
     print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table.")
 
@@ -413,7 +454,7 @@ def generate_read_table(
                 )
                 PIVOT (SUM(read_count)::BIGINT FOR sample IN ({sample_selector}))
             )
-            TO '{temp_filename}' (FORMAT PARQUET)
+            TO {quote_literal(temp_filename)} (FORMAT PARQUET)
             """)
 
         # give user output
@@ -429,7 +470,7 @@ def generate_read_table(
     # extract the read table with correct column names
     read_data_store.execute(f"""
         CREATE OR REPLACE TABLE temp_db.pivot AS 
-            SELECT * FROM read_parquet('{parquet_path}')
+            SELECT * FROM read_parquet({quote_literal(parquet_path)})
         """)
 
     # remove the parquet files
@@ -449,7 +490,7 @@ def generate_read_table(
                 ON sd.sequence_idx = pt.sequence_idx
             WHERE sd.sequence != 'dummy_seq'
             ORDER BY sd.sequence_order
-        ) TO '{output_file_name_parquet}' (FORMAT 'parquet')
+        ) TO {quote_literal(output_file_name_parquet)} (FORMAT 'parquet')
         """)
 
     # close the connection
@@ -508,10 +549,10 @@ def generate_sequence_groups(
     # ingest into duck db temp file to then join in data
     read_data_store = duckdb.connect(database_path)
     temp_db = Path(temp_path).joinpath("temp.duckdb")
-    read_data_store.execute(f"ATTACH '{temp_db}' as temp_db")
+    read_data_store.execute(f"ATTACH {quote_literal(temp_db)} as temp_db")
     read_data_store.execute(f"""
         CREATE OR REPLACE TABLE temp_db.matchfile_temp AS
-        SELECT * FROM read_csv('{matchfile_path}',
+        SELECT * FROM read_csv({quote_literal(matchfile_path)},
             delim = '\\t',
             header = False,
             columns = {{
@@ -629,7 +670,7 @@ def generate_sequence_groups(
     # add the group mapping to the main db
     read_data_store.execute(f"""
         CREATE OR REPLACE TABLE main.group_mapping AS
-        SELECT * FROM read_csv('{mapping_csv_path}',
+        SELECT * FROM read_csv({quote_literal(mapping_csv_path)},
         delim = '\\t',
         header = False,
         columns = {{
@@ -802,6 +843,8 @@ def main(project=Path.cwd()):
     input_files = glob.glob(
         str(Path(project).joinpath(prior_step, "data", "*.fasta.gz"))
     )
+    # fail early, before any heavy computation, if sample names cannot be used as column names
+    check_sample_names([Path(file).with_suffix("").stem for file in input_files])
     # generate a temp folder for saving the buffered dicts
     ## create temporal output folder
     for folder in ["temp", "data"]:

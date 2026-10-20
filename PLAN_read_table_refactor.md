@@ -87,9 +87,9 @@ Bereiche über `sequence_order BETWEEN a AND b` (arithmetisch, keine Python-List
 
 ### 2.6 Samplenamen: Quoting und Kollisionen (Review 2.9)
 Helper `quote_ident()` / `quote_literal()` für alle SQL-Stellen. Frühzeitiger, klarer Fehler bei Namen, die case-insensitiv kollidieren oder `hash`/`sequence` heißen.
-- [ ] Impl
-- [ ] Test: Samplenamen mit `'`, `"`, Leerzeichen, Punkten; `Sample1` vs. `sample1` → verständliche Fehlermeldung
-- [ ] Commit
+- [x] Impl: `quote_literal()`/`quote_ident()` für alle Samplenamen **und alle Pfade** in SQL (`ATTACH`, `read_parquet`, `read_csv`, `COPY ... TO`); `check_sample_names()` (reservierte Namen `hash`/`sequence`/`sequence_idx`, Namen die sich nur in Groß-/Kleinschreibung unterscheiden) wird früh in `main` (aus den Dateinamen) und in `generate_read_table` aufgerufen
+- [x] Test: `tests/test_sample_names.py` (Namen mit `'`, `"`, Leerzeichen, Punkt, `;`, Umlauten, `[brackets]*`; Projektordner mit Apostroph; Datei `O'Brien.fasta.gz` durch `fasta_to_parquet`; Kollisionen). **Vorher:** `Parser Error: syntax error at or near "s"` schon bei Projektordnern mit Apostroph (Pfade im SQL), Kollisionsnamen liefen ohne Fehlermeldung durch. **Nachher:** 7/7 grün, gesamte Suite 15/15; groß und klein: Snapshot unverändert
+- [x] Commit
 
 ### 2.7 Alte Ausgaben aufräumen (Review 2.10)
 Vor dem Schreiben `*_read_table_part_*.xlsx`, Parquet und `Logfile_11_*` des Projekts löschen.
