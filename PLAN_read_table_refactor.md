@@ -176,6 +176,14 @@ Listen → `pyarrow` direkt (falls pyarrow ohnehin Abhängigkeit von pandas/Duck
 - [ ] Bench: große Daten mit künstlich kleinem `memory_limit` laufen durch (Spill-Test)
 - [ ] Commit
 
+### 3.8 DuckDB-Version (ganz am Ende der Performance-Phase)
+Aktuell: `setup.py` verlangt `duckdb>=1.3.1`, getestet wird nur mit 1.5.2 (PyPI: 1.5.6). Bewusst **nicht mitten in den Umbau**, damit Benchmarks nicht durch Versionswechsel verfälscht werden.
+- [ ] Gesamte Suite + Harness auf groß/klein mit 1.5.2 und der dann aktuellen 1.5.x laufen lassen (Laufzeit, Peak-RSS, Snapshots identisch)
+- [ ] Prüfen, welche Mindestversion wir wirklich brauchen (xlsx-`COPY` aus 3.1, `PIVOT`, `fetchmany`) und `setup.py` auf die niedrigste **getestete** Version setzen
+- [ ] Dateiformat der `*_read_data_storage.duckdb` wird von `Apscale_analyze.py` weiterverwendet: prüfen, dass eine mit neuerer Version erzeugte Datei mit der Mindestversion lesbar bleibt, sonst Mindestversion anheben
+- [ ] Commit
+- Nicht geplant: GPU-Erweiterung `gpudb` (Apple Metal / Linux CUDA, kein Windows, siehe Antwort im Chat)
+
 ---
 
 ## Phase 4 – Kleinigkeiten (ein Sammel-Commit)
