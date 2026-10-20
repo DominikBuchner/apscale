@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="apscale",
-    version="4.4.0",
+    version="5.0.0",
     author="Dominik Buchner",
     author_email="dominik.buchner524@googlemail.com",
     description="Advanced Pipeline for Simple yet Comprehensive AnaLysEs of DNA metabarcoding data",
@@ -17,7 +17,7 @@ setuptools.setup(
     install_requires=[
         "openpyxl >= 3.0.10",
         "psutil >= 5.8.0",
-        "duckdb>=1.3.1",
+        "duckdb>=1.5.6",
         "more_itertools >= 10.5.0",
         "demultiplexer2 >= 1.1.6",
         "joblib >= 1.0.0",
