@@ -30,12 +30,13 @@ def fasta_to_parquet(fasta_path: str, output_folder: str, perform_hash: bool) ->
             header_data = header.split(";size=")
             seq_hash, seq_count = header_data[0], int(header_data[1].rstrip(";"))
 
+            # normalize first, so that the hash does not depend on case or whitespace
+            seq = seq.upper().strip()
+
             # only compute hash if needed
             if perform_hash:
-                seq_hash = seq.encode("ascii")
-                seq_hash = hashlib.sha3_256(seq_hash).hexdigest()
+                seq_hash = hashlib.sha3_256(seq.encode("ascii")).hexdigest()
 
-            seq = seq.upper().strip()
             all_rows.append([fasta_name, seq_hash, seq, seq_count])
 
     # put into pandas dataframe

@@ -46,9 +46,10 @@ Dazu: `sample_idx` per `ORDER BY sample`, `sequence_idx` per `ORDER BY hash` sta
 
 ### 1.2 Hash nach Normalisierung berechnen (Review 2.7)
 `upper().strip()` **vor** `sha3_256`. Hinweis: ändert Hashes nur, wenn Eingaben Kleinbuchstaben/Whitespace enthalten.
-- [ ] Impl
-- [ ] Test: `acgt` und `ACGT` → gleicher Hash
-- [ ] Commit
+- [x] Impl
+- [x] Test: `tests/test_fasta_to_parquet.py` (`acgt` und `ACGT` → gleicher Hash; Header-Hash bleibt ohne Hashing unverändert); schlägt auf altem Code fehl, auf neuem grün
+- [x] Regression groß: Snapshot identisch zu `step_1_1/large_1` (erwartet, da die Daten Header-Hashes nutzen)
+- [x] Commit
 
 ---
 
