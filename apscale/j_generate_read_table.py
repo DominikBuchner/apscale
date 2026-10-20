@@ -1,4 +1,4 @@
-import glob, os, datetime, gzip, duckdb, hashlib, more_itertools, sys, subprocess
+import glob, datetime, gzip, duckdb, hashlib, more_itertools, shutil, subprocess
 import pandas as pd
 from joblib import Parallel, delayed
 from tqdm import tqdm
@@ -847,13 +847,16 @@ def main(project=Path.cwd()):
 
     # check for valid group thereshold
     if not 0 < group_threshold <= 1:
-        print(
-            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Group threshold needs to be between 0 and 1."
+        raise ValueError(
+            f"Group threshold needs to be between 0 and 1 (0 excluded), got {group_threshold}."
         )
-        sys.exit()
 
     # find out which dataset to load
     prior_step = choose_input(project, "11_generate_read_table")
+    if prior_step is None:
+        raise ValueError(
+            "No previous processing step is enabled in the settings, there is no data to build read tables from."
+        )
 
     print(
         f"{datetime.datetime.now().strftime('%H:%M:%S')}: Last analysis step was {prior_step}. Using data from this step."
@@ -864,18 +867,21 @@ def main(project=Path.cwd()):
     input_files = glob.glob(
         str(Path(project).joinpath(prior_step, "data", "*.fasta.gz"))
     )
+    if not input_files:
+        raise FileNotFoundError(
+            f"No *.fasta.gz files found in {Path(project).joinpath(prior_step, 'data')}."
+        )
+
     # fail early, before any heavy computation, if sample names cannot be used as column names
     check_sample_names([Path(file).with_suffix("").stem for file in input_files])
-    # generate a temp folder for saving the buffered dicts
-    ## create temporal output folder
-    for folder in ["temp", "data"]:
-        try:
-            os.mkdir(Path(project).joinpath("11_read_table", folder))
-        except FileExistsError:
-            pass
-
     data_path = Path(project).joinpath("11_read_table", "data")
     temp_path = Path(project).joinpath("11_read_table", "temp")
+
+    # the temp folder belongs to this step only, start from scratch to get rid of leftovers of crashed runs
+    shutil.rmtree(temp_path, ignore_errors=True)
+    for folder in (temp_path, data_path):
+        folder.mkdir(parents=True, exist_ok=True)
+
     project_name = Path(project).stem.replace("_apscale", "")
     database_path = data_path.joinpath(f"{project_name}_read_data_storage.duckdb")
     logfile_base_path = Path(project).joinpath("11_read_table")
@@ -886,13 +892,6 @@ def main(project=Path.cwd()):
 
     # remove read tables of earlier runs, they would be stale if read table generation is switched off
     remove_old_read_tables(data_path, project_name)
-
-    # check if there are old parquet files, remove them
-    for file in temp_path.glob("*.parquet.snappy"):
-        if file.is_file():
-            file.unlink()
-
-    # check if there are old parquet files and remove them first
 
     print(
         f"{datetime.datetime.now().strftime('%H:%M:%S')}: Building read data storage."
@@ -964,5 +963,4 @@ def main(project=Path.cwd()):
     write_log(logfile_base_path, database_path)
 
     # remove the temporary folder
-    if temp_path.is_dir():
-        temp_path.rmdir()
+    shutil.rmtree(temp_path, ignore_errors=True)

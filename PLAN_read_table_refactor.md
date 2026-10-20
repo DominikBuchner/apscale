@@ -99,9 +99,9 @@ Vor dem Schreiben `*_read_table_part_*.xlsx`, Parquet und `Logfile_11_*` des Pro
 
 ### 2.8 Eingaben und Fehlerbehandlung in `main` (Review 2.12, 2.13)
 Keine `*.fasta.gz` → klare Meldung und Abbruch; ungültiger Schwellenwert → Exception bzw. Exit-Code ≠ 0; `mkdir(parents=True, exist_ok=True)`; Temp-Aufräumen robust (`shutil.rmtree(..., ignore_errors=True)`).
-- [ ] Impl
-- [ ] Test: leerer Ordner, Schwellenwert 0 / 1.5, vorhandener Temp-Ordner mit Resten
-- [ ] Commit
+- [x] Impl: `ValueError` bei Schwellenwert ∉ (0, 1] (statt `print` + `sys.exit()`), `ValueError` wenn kein vorheriger Schritt aktiv ist (`choose_input` liefert `None`), `FileNotFoundError` ohne `*.fasta.gz`; Ordner mit `mkdir(parents=True, exist_ok=True)`; Temp-Ordner wird zu Beginn komplett neu angelegt und am Ende mit `shutil.rmtree` entfernt; ungenutzte Imports `os`/`sys` entfernt
+- [x] Test: `tests/test_main_inputs.py` (6 Fälle: Schwellenwerte 0 / 1.5 / −0.2, kein Input, Reste im Temp-Ordner, fehlender `11_read_table`-Ordner). **Vorher:** alle rot – `SystemExit` ohne Fehlercode, kryptischer DuckDB-IOError bei fehlendem Input, **Reste im Temp-Ordner (`sequence_read_count_data.duckdb`) brechen den ganzen Lauf**, `FileNotFoundError` bei fehlendem Ordner. **Nachher:** alle grün, Suite 24/24; groß und klein: Snapshot unverändert
+- [x] Commit
 
 ### 2.9 vsearch-Aufruf (Review 2.11)
 `check=True` bzw. Rückgabecode prüfen, klare Meldung wenn `vsearch` fehlt. Laut vsearch-Man-Page (Quelle geprüft): `--maxrejects` Default 32, nur bei `--maxaccepts 0` **und** `--maxrejects 0` wird die komplette DB durchsucht; Treffer-Kandidaten werden nach gemeinsamen Wörtern sortiert (Heuristik); `--qmask` Default `dust`. Unser Aufruf (`--maxaccepts 0`, maxrejects Default) kann also Treffer auslassen. **Testreihe**, ob das die Gruppen verändert:
