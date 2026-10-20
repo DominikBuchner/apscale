@@ -106,15 +106,11 @@ Keine `*.fasta.gz` → klare Meldung und Abbruch; ungültiger Schwellenwert → 
 ### 2.9 vsearch-Aufruf (Review 2.11)
 `check=True` bzw. Rückgabecode prüfen, klare Meldung wenn `vsearch` fehlt. Laut vsearch-Man-Page (Quelle geprüft): `--maxrejects` Default 32, nur bei `--maxaccepts 0` **und** `--maxrejects 0` wird die komplette DB durchsucht; Treffer-Kandidaten werden nach gemeinsamen Wörtern sortiert (Heuristik); `--qmask` Default `dust`. Unser Aufruf (`--maxaccepts 0`, maxrejects Default) kann also Treffer auslassen. **Testreihe**, ob das die Gruppen verändert:
 `--maxrejects 0` vs. Default (32) und `--qmask/--dbmask none` vs. `dust`, auf mittlerem Datensatz und echten Daten.
-- [ ] Impl (Fehlerprüfung)
-- [ ] Test: vsearch nicht im PATH → saubere Fehlermeldung
-- [ ] Experiment: Gruppen vergleichen (Anzahl Gruppen, Mapping-Differenz). Ergebnis hier notieren: ______
-- [ ] Entscheidung (Parameter ändern ja/nein): ______
-- [ ] Commit
-
----
-
-## Phase 3 – Performance (nach Korrektheit, jeweils gegen Baseline messen)
+- [x] Impl (Fehlerprüfung: `RuntimeError` bei fehlendem vsearch bzw. Rückgabecode ≠ 0 mit stderr; `VSEARCH_EXTRA_ARGS` für Experimente)
+- [x] Test: vsearch nicht im PATH / vsearch schlägt fehl → klare Fehlermeldung (`tests/test_main_inputs.py`)
+- [x] Experiment (`tests/experiments/vsearch_params.py`, groß, Schwelle 0.97): Maskierung (`--qmask/--dbmask none`) ändert nichts (7/6 Paare, 0 Gruppen). `--maxrejects 0` findet 65 727 zusätzliche Paare (+6,8 %, alle bei 97,0–98,5 % Identität), 6 470 statt 6 485 Gruppen, 441 Sequenzen in anderer Gruppe; vsearch-Zeit ca. 11 min statt < 1 min
+- [x] Entscheidung: **`--maxrejects` bleibt beim Standard 32**, Maskierung bleibt Standard. Siehe aber 3.3: vsearch selbst (`--cluster_size`) vermeidet das Problem
+- [x] Commit
 
 ### 3.1 Excel direkt über DuckDB (Wunsch: gesetzt)
 `COPY (...) TO '*.xlsx' (FORMAT xlsx, HEADER true)` für Read-Tabellen und Log; kein pandas/xlsxwriter mehr.
@@ -136,17 +132,20 @@ Memory: nur DuckDB-intern (spillt), nichts in Python.
 - [ ] Bench: Laufzeit, Peak-RSS, **Plattenverbrauch des Temp-Ordners**
 - [ ] Commit
 
-### 3.3 Gruppierung: O(N²)-Schleife ersetzen (Review 3.1)
-**Memory-sicherer Entwurf** (nicht „alles im RAM“):
-- Match-Tabelle bleibt in DuckDB. Abfrage: `... WHERE target_order > query_order ORDER BY query_order, target_order` (DuckDB sortiert out-of-core), per `fetchmany` gestreamt.
-- In Python nur ein `numpy`-int32-Array `group_of[order]` (Größe = Anzahl Sequenzen, ~4 MB pro 1 Mio.).
-- Ein Durchlauf: Für jede Query in Reihenfolge: ist sie noch nicht zugeordnet → sie ist Repräsentant; alle Targets mit noch freiem Slot bekommen diese Gruppe. Am Ende: jede nicht zugeordnete Sequenz ist eine eigene Gruppe.
-- Semantik identisch zum bisherigen Code (Treffer auf Sequenzen mit kleinerer Order werden ignoriert, weil die schon entschieden sind).
-- [ ] Alte Implementierung als Test-Orakel in `tests/` sichern (nach 1.1, damit beide dieselbe Order nutzen)
+### 3.3 Gruppierung: eigene O(N²)-Schleife ersetzen (Review 3.1)
+**Neuer Befund aus dem Vergleich mit dem vsearch-Quellcode (`src/core/cluster.cpp`) und einem Test auf den echten Daten:**
+- vsearch clustert **online gegen die bisherigen Zentroide** (Datenbank = nur Zentroide), unsere Methode sucht **alle gegen alle** und fügt danach in Python zusammen. Bei `maxrejects 32` verbraucht der All-vs-all-Aufruf sein Budget an Nicht-Zentroiden und verpasst Nachbarn nahe der Schwelle (Ursache plausibel, nicht separat nachgewiesen).
+- vsearch sortiert Eingaben intern nach `(size desc, Label alphanumerisch, Eingabereihenfolge)`. Unsere Reihenfolge `(read_sum desc, hash asc)` aus 1.1 ist damit identisch.
+- `vsearch --cluster_size in.fasta --id 0.97 --sizeorder --maxaccepts 0 --uc out.uc` (Header `hash;size=read_sum`, **maxrejects Standard 32**) liefert auf `large` **exakt** dieselbe Zuordnung wie unser exhaustiver All-vs-all-Lauf (6 470 Gruppen, 0 Abweichungen), in **2 s** (1 Thread: 19 s) statt rund 110 s. Ergebnis ist unabhängig von der Threadzahl (1 / 3 / alle: identische `.uc`). Ohne `--sizeorder` wählt vsearch den nächsten statt des häufigsten Zentroids → andere Semantik (2 107 Abweichungen), nicht verwenden.
+- Gegenüber dem heutigen Stand ändert das 441 Zuordnungen und 15 Gruppen (die heute verpassten Treffer). **Das ist eine Ergebnisänderung und braucht eine Freigabe.**
+
+Vorschlag (statt Python-Schleife): `generate_sequence_groups` schreibt `hash;size=read_sum` als FASTA, ruft `vsearch --cluster_size ... --uc` auf, liest die `.uc` (Typ `S` = Zentroid, `H` = Mitglied) per DuckDB und baut `group_mapping` daraus. Entfällt: Matchfile, `group_lookup_table`, `groups_found`, Python-Schleife, tqdm. Memory: O(Sequenzen) in vsearch, nichts in Python.
+- [ ] Freigabe der Ergebnisänderung (441 Zuordnungen / −15 Gruppen auf `large`)
+- [ ] Alte Implementierung (nach 1.1) als Test-Orakel in `tests/` sichern, mit `--maxrejects 0` ist sie das Referenzergebnis
 - [ ] Impl
-- [ ] Test: neuer Algorithmus == altes Orakel auf Zufallsdaten (viele Seeds, mit Ties, ohne Treffer, erste Sequenz ohne Treffer, asymmetrische Treffer), identisches `group_mapping`
-- [ ] Test: Lauf-zu-Lauf-Stabilität (Phase 1.1)
-- [ ] Bench: Laufzeit und Peak-RSS bei 100k / 1 Mio. Sequenzen
+- [ ] Test: neues Mapping == Orakel mit exhaustiver Suche (groß und klein), thread-unabhängig, Randfälle (Sequenz ohne Treffer, leere Samples)
+- [ ] Bench: Laufzeit und Peak-RSS bei groß; skaliertes Dataset für > 100k Sequenzen
+- [ ] Neue Referenz-Snapshots schreiben, Unterschiede zu `step_1_1` dokumentieren
 - [ ] Commit
 
 ### 3.4 Parquet nach `sequence_order`-Bereichen schreiben (Review 3.4)
