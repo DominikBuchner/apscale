@@ -18,6 +18,9 @@ EXCEL_MAX_COLUMNS = 16_384
 EXCEL_MAX_CELLS = 10_000_000
 
 
+# additional vsearch options for the sequence grouping, e.g. for experiments
+VSEARCH_EXTRA_ARGS = []
+
 # names that would collide with the columns of the read tables
 RESERVED_COLUMN_NAMES = {"hash", "sequence", "sequence_idx"}
 
@@ -547,25 +550,37 @@ def generate_sequence_groups(
     )
 
     # compute the matchfile with vsearch
-    subprocess.run(
-        [
-            "vsearch",
-            "--usearch_global",
-            sequence_fasta,
-            "--db",
-            sequence_fasta,
-            "--id",
-            str(group_threshold),
-            "--userout",
-            matchfile_path,
-            "--quiet",
-            "--userfields",
-            "query+target+id",
-            "--maxaccepts",
-            str(0),
-            "--self",
-        ]
-    )
+    try:
+        result = subprocess.run(
+            [
+                "vsearch",
+                "--usearch_global",
+                str(sequence_fasta),
+                "--db",
+                str(sequence_fasta),
+                "--id",
+                str(group_threshold),
+                "--userout",
+                str(matchfile_path),
+                "--quiet",
+                "--userfields",
+                "query+target+id",
+                "--maxaccepts",
+                str(0),
+                "--self",
+            ]
+            + VSEARCH_EXTRA_ARGS,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "vsearch was not found. Please install vsearch and make sure it is available in the PATH."
+        ) from None
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"vsearch failed with exit code {result.returncode}: {result.stderr.strip()}"
+        )
 
     # ingest into duck db temp file to then join in data
     read_data_store = duckdb.connect(database_path)

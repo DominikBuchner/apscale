@@ -65,3 +65,20 @@ def test_missing_output_folder_is_created(project):
     shutil.rmtree(project / "11_read_table")
     j.main(project)
     assert list((project / "11_read_table" / "data").glob("*_read_table.parquet.snappy"))
+
+
+def test_missing_vsearch_gives_clear_error(storage, tmp_path, monkeypatch):
+    db = tmp_path / "db.duckdb"
+    shutil.copy(storage, db)
+    monkeypatch.setenv("PATH", str(tmp_path))  # no vsearch here
+    with pytest.raises(RuntimeError, match="vsearch was not found"):
+        j.generate_sequence_groups("t", tmp_path, db, tmp_path, 0.97)
+
+
+@needs_vsearch
+def test_failing_vsearch_reports_its_message(storage, tmp_path):
+    db = tmp_path / "db.duckdb"
+    shutil.copy(storage, db)
+    # the sequence fasta is missing in tmp_path, vsearch fails
+    with pytest.raises(RuntimeError, match="vsearch failed"):
+        j.generate_sequence_groups("t", tmp_path, db, tmp_path, 0.97)
