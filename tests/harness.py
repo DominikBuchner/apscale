@@ -135,9 +135,8 @@ def run(dataset_dir: Path, out_dir: Path, label: str, work_dir: Path, skip_excel
         wb.save(settings_path)
     cores = int(pd.read_excel(settings_path, sheet_name="0_general_settings")["cores to use"].item())
     if skip_excel:
-        # Excel writing is slow and not needed for the DuckDB-based comparison. Patched only after
-        # project creation (which needs to_excel). Valid while the module writes Excel through pandas.
-        pd.DataFrame.to_excel = lambda *args, **kwargs: None
+        # Excel writing is not needed for the DuckDB-based comparison and slows the run down.
+        j_generate_read_table.write_excel = lambda *args, **kwargs: None
     start = time.perf_counter()
     with PeakRss() as rss, open(log_path, "w", encoding="utf-8") as log:
         old_stdout, sys.stdout = sys.stdout, log
@@ -181,7 +180,7 @@ if __name__ == "__main__":
     r.add_argument("dataset_dir", type=Path)
     r.add_argument("out_dir", type=Path)
     r.add_argument("--label", default="unlabelled")
-    r.add_argument("--skip-excel", action="store_true", help="no-op pandas to_excel (timings then not comparable to full runs)")
+    r.add_argument("--skip-excel", action="store_true", help="do not write Excel files (timings then not comparable to full runs)")
     r.add_argument("--cores", type=int, default=None, help="override 'cores to use' in the project settings")
     r.add_argument("--work-dir", type=Path, default=Path("D:/apscale_test_data/work"))
     args = ap.parse_args()

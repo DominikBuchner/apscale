@@ -60,6 +60,30 @@ def check_sample_names(sample_names: list) -> None:
         )
 
 
+def write_excel(connection, query: str, output_file: str) -> None:
+    """Stream the result of a query into an Excel file with the DuckDB excel extension (single sheet with header).
+
+    Args:
+        connection: DuckDB connection to run the query on.
+        query (str): SELECT statement producing the table.
+        output_file (str): Path of the xlsx file to write.
+    """
+    try:
+        connection.execute("LOAD excel")
+    except duckdb.Error:
+        try:
+            connection.execute("INSTALL excel")
+            connection.execute("LOAD excel")
+        except duckdb.Error as error:
+            raise RuntimeError(
+                "The DuckDB excel extension is needed to write Excel files and could not be installed "
+                f"(is there an internet connection for the first use?): {error}"
+            ) from None
+    connection.execute(
+        f"COPY ({query}) TO {quote_literal(output_file)} (FORMAT xlsx, HEADER true)"
+    )
+
+
 def remove_old_read_tables(
     output_folder: str, project_name: str, sequence_type: str = None
 ) -> None:
@@ -297,7 +321,6 @@ def generate_read_table(
         database_path (str): Path to the database to select the data from.
         sequence_type (str): Wether to write sequence or group data.
         temp_folder (str): Path to a temp folder for intermediate writes. Will be deleted at end of function.
-        to_excel: Wether to write output to excel or not.
     """
     # connect the database
     read_data_store = duckdb.connect(database_path)
@@ -399,7 +422,7 @@ def generate_read_table(
                 f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes, sequences and ordering table."
             )
 
-            read_table = read_data_store.execute(f"""
+            read_table_query = f"""
                 SELECT
                     sd.hash,
                     sd.sequence,
@@ -409,7 +432,7 @@ def generate_read_table(
                     ON sd.sequence_idx = pt.sequence_idx
                 WHERE sd.sequence != 'dummy_seq'
                 ORDER BY sd.sequence_order
-                """).df()
+                """
 
             print(
                 f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing Excel output file."
@@ -422,8 +445,8 @@ def generate_read_table(
                 )
             )
 
-            # write the output, give user output
-            read_table.to_excel(output_file_name_xlsx, index=False, engine="xlsxwriter")
+            # let DuckDB stream the result into the Excel file
+            write_excel(read_data_store, read_table_query, output_file_name_xlsx)
 
     # always write output to parquet
     print(
@@ -722,8 +745,13 @@ def write_log(logfile_base_path: str, database_path: str):
     # connect to the read data store
     read_data_store = duckdb.connect(database_path)
 
-    logfile_cursor = read_data_store.execute("""
+    # number the log rows once, so that the files can be cut into fixed ranges
+    read_data_store.execute("""
+        CREATE OR REPLACE TEMP TABLE log_rows AS
         SELECT
+            row_number() OVER (
+                ORDER BY gd.sequence_order, sd.read_sum DESC, sd.hash ASC
+            ) AS row_nr,
             gd.hash AS group_hash,
             sd.hash AS sequence_hash,
             sd.read_sum
@@ -732,26 +760,25 @@ def write_log(logfile_base_path: str, database_path: str):
             ON gm.sequence_idx = sd.sequence_idx
         LEFT JOIN group_data AS gd
             ON gm.group_idx = gd.sequence_idx
-        ORDER BY gd.sequence_order, sd.read_sum DESC, sd.hash ASC
         """)
-    columns = [column[0] for column in logfile_cursor.description]
+    nr_of_rows = read_data_store.execute("SELECT COUNT(*) FROM log_rows").fetchone()[0]
 
     print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing logs.")
 
-    file_nr = 1
-    while True:
-        rows = logfile_cursor.fetchmany(LOG_ROWS_PER_FILE)
-        if not rows:
-            break
-
-        # generate a logfile name, one file per chunk
+    for file_nr, first_row in enumerate(range(1, nr_of_rows + 1, LOG_ROWS_PER_FILE), start=1):
+        # one file per range of rows
         logfile_name = Path(logfile_base_path).joinpath(
             f"Logfile_11_read_table_part_{file_nr}.xlsx"
         )
-        pd.DataFrame(rows, columns=columns).to_excel(
-            logfile_name, engine="xlsxwriter", index=False
+        write_excel(
+            read_data_store,
+            f"""
+            SELECT group_hash, sequence_hash, read_sum FROM log_rows
+            WHERE row_nr BETWEEN {first_row} AND {first_row + LOG_ROWS_PER_FILE - 1}
+            ORDER BY row_nr
+            """,
+            logfile_name,
         )
-        file_nr += 1
 
     read_data_store.close()
 

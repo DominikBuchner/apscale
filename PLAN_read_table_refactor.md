@@ -118,11 +118,18 @@ Keine `*.fasta.gz` → klare Meldung und Abbruch; ungültiger Schwellenwert → 
 - 1 Mio. Zeilen × (2 + 10 Spalten) und 100 000 Zeilen × 5 000 Spalten, Peak-RSS messen, Vergleich mit altem Pfad
 - Falls Peak-RSS hoch: Chunkgröße der Teil-Dateien runter, oder Fallback `xlsxwriter(constant_memory=True)` mit `fetchmany`-Streaming aus DuckDB
 - Extension: `INSTALL excel`/`LOAD excel` mit klarer Meldung, wenn offline und nicht installiert
-- [ ] Bench-Prototyp (vor Impl.)
-- [ ] Impl
-- [ ] Test: Werte Zelle für Zelle gleich wie Baseline (per openpyxl, `read_only=True`)
-- [ ] Bench: Laufzeit + Peak-RSS vs. Baseline
-- [ ] Commit
+- [x] Bench-Prototyp (`tests/experiments/excel_writer_bench.py`, größte reale Dateigröße ≈ 10 Mio. Zellen, jede Messung in eigenem Prozess):
+
+| Fall | pandas + xlsxwriter (alt) | DuckDB `COPY ... (FORMAT xlsx)` | xlsxwriter `constant_memory` + `fetchmany` |
+|---|---|---|---|
+| lang: 800 000 Zeilen × 12 Spalten | 88 s / **2 203 MB** | **13,8 s / 45 MB** | 49 s / 91 MB |
+| breit: 10 000 Zeilen × 1 002 Spalten | 76 s / **1 688 MB** | **7,9 s / 135 MB** | 34 s / 391 MB |
+
+  → der DuckDB-Writer **streamt** (Speicher unabhängig von der Dateigröße) und ist 6–10× schneller. Inhalt geprüft: Kopfzeile, Zeilenzahl, erste Zeile, Zelltypen (`str`/`int`) und Sheet-Name (`Sheet1`) identisch zur pandas-Variante. Entscheidung: DuckDB-Writer, kein Fallback nötig.
+- [x] Impl: Hilfsfunktion `write_excel(connection, query, file)` (lädt die `excel`-Extension, installiert sie bei Bedarf, klare Fehlermeldung wenn offline); Read-Tabellen und Log schreiben per `COPY`, kein `.df()`/pandas/xlsxwriter mehr in diesem Modul. Das Log wird einmal nummeriert (`TEMP TABLE log_rows`) und in Zeilenbereichen geschrieben
+- [x] Test: `tests/test_excel_content.py` (Sequenzen und Gruppen, viele Teile: Hash, Sequenz, Reihenfolge und Zählwerte == Parquet, jedes Sample genau einmal), bestehende Excel-/Log-Tests weiter grün, Suite 33/33. Echte Daten `large`: Excel-Teile == Parquet (Sequenzen: 2 Teile, 27 964 Zeilen; Gruppen: 1 Teil, 6 470 Zeilen), Snapshot unverändert gegenüber `step_3_3`
+- [x] Bench (`large`, **mit** Excel, gesamte Pipeline): **43 s statt 303 s**; Peak-RSS unverändert 7,0 GB (also nicht vom Excel-Schreiben, offen für 3.2/3.7)
+- [x] Commit
 
 ### 3.2 Kreuzprodukt entfernen (Review 3.2)
 Pivot direkt auf der sparsen `*_read_count_data`, Nullen per `COALESCE(col, 0)` nach dem Pivot. `cross_product`, `read_table_data`, `filtered`, `pivot` als Tabellen entfallen. Excel-Teile filtern auf `sample_idx`-Bereiche.
@@ -214,6 +221,7 @@ Alle Läufe mit den Standard-Settings aus `create_project` (`cores to use` = CPU
 
 | 1.1 Tie-Breaker | large, `--skip-excel` | 303 s (mit Excel) | 156 s / 151 s / 151 s | 7,0 GB | 6,8 / 6,8 / 4,6 GB | Zeiten nicht vergleichbar (Excel aus); 3. Lauf mit 2 Kernen, gleiches Ergebnis |
 | 2.4 Log | large, mit Excel | 303 s / 307 s | 319 s | 7,0 GB | 7,8 GB | volle Pipeline mit Excel; Abweichung im Rahmen der Messschwankung bzw. Rest-Overhead, nicht untersucht |
+| 3.1 Excel per DuckDB | large, **mit** Excel | 303 s / 307 s | 43 s | 7,0 GB | 7,0 GB | Excel-Schreiben selbst: 6–10× schneller, Speicher −90 % im Prototyp; Gesamtspeicher kommt woanders her |
 | 3.3 Gruppierung per `vsearch --cluster_size` | large, `--skip-excel` | 138–156 s | 30 s | 6,8–7,0 GB | 7,0 GB | Gruppierung 110 s → 2 s; Mapping == exhaustiver Referenzlauf |
 | 1.1 Tie-Breaker | small, `--skip-excel` | 7 s | 4,2 s / 4,8 s | 2,6 GB | – | 2. Lauf mit 1 Kern |
 
