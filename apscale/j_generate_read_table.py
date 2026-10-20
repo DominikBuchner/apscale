@@ -139,7 +139,7 @@ def build_read_store(input_folder, database_path):
                     ORDER BY sum(srcd.read_count) DESC, seqd.hash ASC, seqd.sequence ASC
                 ) AS sequence_order, 
                 srcd.sequence_idx, 
-                sum(srcd.read_count) AS read_sum
+                sum(srcd.read_count)::BIGINT AS read_sum
             FROM sequence_read_count_data AS srcd
             JOIN sequence_data AS seqd ON srcd.sequence_idx = seqd.sequence_idx
             GROUP BY srcd.sequence_idx, seqd.hash, seqd.sequence
@@ -315,7 +315,7 @@ def generate_read_table(
                         SELECT sequence_idx, sample, read_count
                         FROM temp_db.filtered
                     )
-                    PIVOT (SUM(read_count) FOR sample IN ({sample_columns}))
+                    PIVOT (SUM(read_count)::BIGINT FOR sample IN ({sample_columns}))
                 """)
 
             print(
@@ -393,7 +393,7 @@ def generate_read_table(
                     FROM temp_db.read_table_data
                     WHERE sequence_idx BETWEEN {min_idx} AND {max_idx}
                 )
-                PIVOT (SUM(read_count) FOR sample IN ({sample_selector}))
+                PIVOT (SUM(read_count)::BIGINT FOR sample IN ({sample_selector}))
             )
             TO '{temp_filename}' (FORMAT PARQUET)
             """)
@@ -625,7 +625,7 @@ def generate_sequence_groups(
         CREATE OR REPLACE TABLE temp_db.group_data_temp AS
         SELECT 
             gmt.group_idx AS sequence_idx,
-            SUM(sd.read_sum) as read_sum
+            SUM(sd.read_sum)::BIGINT AS read_sum
         FROM main.group_mapping AS gmt
         LEFT JOIN main.sequence_data sd
             ON gmt.sequence_idx = sd.sequence_idx
@@ -673,7 +673,7 @@ def generate_sequence_groups(
         SELECT
             gdt.sample_idx,
             gdt.sequence_idx,
-            SUM(gdt.read_count) AS read_count
+            SUM(gdt.read_count)::BIGINT AS read_count
         FROM temp_db.group_data_temp AS gdt
         GROUP BY gdt.sample_idx, gdt.sequence_idx
     """)

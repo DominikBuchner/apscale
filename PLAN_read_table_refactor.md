@@ -63,9 +63,9 @@ Reproduziert: Demo mit 4 Seqs / 3 Gruppen liefert 4 Zeilen, Zeile des Gruppenmit
 
 ### 2.2 Zählertyp `HUGEINT` → `BIGINT` (Review 2.6)
 Betrifft auch `group_data.read_sum` (im Demo bereits `210.0`). `::BIGINT` bei allen `SUM(...)`.
-- [ ] Impl
-- [ ] Test: `typeof` aller Zählspalten im Parquet und in den Tabellen ist `BIGINT`
-- [ ] Commit
+- [x] Impl (`::BIGINT` an den 5 `SUM`-Stellen: `read_sum`, beide `PIVOT`s, `group_data`, `group_read_count_data`)
+- [x] Test: `check_read_tables.py` prüft Spaltentypen. **Vorher:** Parquet-Zählspalten `DOUBLE`, `group_read_count_data.read_count` `DOUBLE`/`HUGEINT`. **Nachher:** alle `BIGINT`, 12 Prüfungen grün auf groß; Snapshot-Inhalt unverändert gegenüber `step_1_1`
+- [x] Commit
 
 ### 2.3 Chunking ohne Sortierlücke (Review 2.3)
 Bereiche über `sequence_order BETWEEN a AND b` (arithmetisch, keine Python-Liste aller IDs). Wird mit 3.4 zusammen sauber, kann aber vorab einzeln gefixt werden, falls 3.4 später kommt.

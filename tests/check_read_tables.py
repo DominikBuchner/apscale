@@ -35,6 +35,11 @@ for kind, table, counts, prefix in (
         JOIN {S(table)} s USING (hash) WHERE p.pos != s.sequence_order""").fetchone()[0]
     check(f"{kind}: row order == sequence_order", wrong_order == 0, f"{wrong_order} rows differ")
 
+    types = {t for _, t in duckdb.sql(f"SELECT column_name, column_type FROM (DESCRIBE SELECT * EXCLUDE (hash, sequence) FROM {P})").fetchall()}
+    check(f"{kind}: count columns are BIGINT", types == {"BIGINT"}, str(types))
+    db_type = duckdb.sql(f"SELECT typeof(read_count) FROM {S(counts)} LIMIT 1").fetchone()[0]
+    check(f"{kind}: snapshot read_count is BIGINT", db_type == "BIGINT", db_type)
+
     cols = [c for c in duckdb.sql(f"SELECT * FROM {P} LIMIT 0").columns if c not in ("hash", "sequence")]
     nulls = duckdb.sql(
         f"SELECT count(*) FROM {P} WHERE " + " OR ".join(f'"{c}" IS NULL' for c in cols)
