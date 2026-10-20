@@ -166,11 +166,10 @@ Jeder Chunk joint Hash/Sequenz selbst und schreibt in Reihenfolge; kein globaler
 - [ ] Commit
 
 ### 3.5 `build_read_store` schlanker (Review 3.5)
-`sample_idx` schon in Python vergeben und in die Parquet-Dateien schreiben (kein String-Join auf `sample`). `sequence_idx` per Join auf `hash`; vorher Eindeutigkeit `hash → sequence` prüfen (Fehler, wenn nicht eindeutig). `ALTER` + `UPDATE` durch ein einziges `CREATE TABLE AS` mit Aggregation ersetzen.
-- [ ] Impl
-- [ ] Test: Tabellen identisch zu Baseline (bis auf Index-Vergabe, dort gegen 1.1 prüfen)
-- [ ] Bench
-- [ ] Commit
+- [x] Impl: `sequence_data` entsteht in **einem** `CREATE TABLE AS` mit Aggregation (`sequence_idx`, `hash`, `sequence`, `sequence_order`, `read_sum`), kein `ALTER` + `UPDATE` mehr; der Join der Read Counts läuft nur noch über `hash` (kurzer String) statt `hash AND sequence`; vorher Prüfung, dass jeder Hash genau eine Sequenz hat (sonst `ValueError` mit Beispielen). Verworfen: `sample_idx` schon in Python vergeben (nur 639 kurze Namen, kein messbarer Vorteil)
+- [x] Test: neuer Test für mehrdeutige Hashes; Suite 49/49. `large`: **alle sechs Tabellen der Datenbank inhaltlich und im Schema identisch zur Datenbank vor der Änderung** (inkl. `sample_idx`/`sequence_idx`/`sequence_order`), Snapshot und 12 Prüfungen unverändert, `small` ebenso
+- [x] Bench: bei 28k Sequenzen kein messbarer Unterschied (Aufbau 2–3 s, dominiert vom parallelen Einlesen; Gesamt 22,6 s). Vorteil bei deutlich mehr Sequenzen **nicht gemessen**
+- [x] Commit
 
 ### 3.6 `fasta_to_parquet` ohne pandas (Review 3.6)
 Befund aus der Messung: Ein Workerprozess lädt alle Importe des Moduls der Funktion. pandas kostet ca. 40 MB, Bio ca. 21 MB, duckdb ca. 15 MB (Baseline Python 16 MB). Deshalb eigenes, schlankes Modul statt nur pandas in der Funktion zu ersetzen.
@@ -202,15 +201,14 @@ Aktuell: `setup.py` verlangt `duckdb>=1.3.1`, getestet wird nur mit 1.5.2 (PyPI:
 
 ---
 
-## Phase 4 – Kleinigkeiten (ein Sammel-Commit)
-- [ ] Stabile Spaltenreihenfolge statt Tuple-Unpacking aus `SELECT *`
-- [ ] Ungenutzte Variablen entfernen (`sequence_counter`, Zuweisung bei `COPY`, doppelte `pbar.update`)
-- [ ] Docstrings korrigieren (`to_excel` entfernen), veraltetes „hdf store“-Kommentar
-- [ ] Teilenummern vereinheitlichen (Excel und Log beginnen bei 1)
-- [ ] Typ-Hints `str` → `Path`
-- [ ] Logging: einheitliche Hilfsfunktion statt wiederholtem `datetime.now().strftime(...)`
-
----
+## Phase 4 – Kleinigkeiten (zusammen mit 3.5 umgesetzt)
+- [x] Stabile Spaltenreihenfolge statt Tuple-Unpacking aus `SELECT *` (entfällt mit der neuen Gruppierung in 3.3)
+- [x] Ungenutzte Variablen entfernt (`sequence_counter` und doppelte `pbar.update` mit 3.3, Zuweisung bei `COPY`), ungenutzte Imports (`os`, `sys`, `gzip`, `hashlib`, `tqdm`, `Bio`-Parser)
+- [x] Docstrings korrigiert (`to_excel`), veraltete Kommentare („hdf store“, „buffered dicts“)
+- [x] Teilenummern vereinheitlicht: Excel-Read-Tabellen und Log beginnen bei `part_1` (**Dateinamen der Read-Tabellen ändern sich von `part_0` auf `part_1`**)
+- [x] Typ-Hints `str` → `Path` (Funktionen wandeln mit `Path()` um); `main(project=None)` statt `Path.cwd()` als Default zur Importzeit
+- [x] Einheitliche Hilfsfunktion `log()` statt 21-mal `datetime.now().strftime(...)`
+- [x] Suite 49/49, Snapshots unverändert, Datenbank identisch (siehe 3.5)
 
 ## Abschluss
 - [ ] Voller Lauf auf realem Datensatz: Ausgaben gegen Baseline vergleichen (bekannte, gewollte Unterschiede: Gruppen-Parquet, Log, BIGINT, Tie-Reihenfolge)

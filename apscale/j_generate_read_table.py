@@ -25,6 +25,11 @@ VSEARCH_EXTRA_ARGS = []
 RESERVED_COLUMN_NAMES = {"hash", "sequence", "sequence_idx"}
 
 
+def log(message: str) -> None:
+    """Print a message with the current time."""
+    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: {message}")
+
+
 def quote_literal(value) -> str:
     """Quote a string (e.g. a path or sample name) as SQL string literal."""
     return "'" + str(value).replace("'", "''") + "'"
@@ -129,12 +134,12 @@ def zero_filled_columns(samples: list, table_alias: str = "pt") -> str:
 
 
 def remove_old_read_tables(
-    output_folder: str, project_name: str, sequence_type: str = None
+    output_folder: Path, project_name: str, sequence_type: str = None
 ) -> None:
     """Remove read tables (Excel parts and parquet) of earlier runs, so they are not mixed up with new ones.
 
     Args:
-        output_folder (str): Folder the read tables are written to.
+        output_folder (Path): Folder the read tables are written to.
         project_name (str): Name of the apscale project.
         sequence_type (str, optional): Only remove "sequence" or "group" tables. Defaults to both.
     """
@@ -147,7 +152,7 @@ def remove_old_read_tables(
 
 
 def convert_fastas_to_parquet(
-    input_files: list, output_folder: str, perform_hash: bool, cores: int
+    input_files: list, output_folder: Path, perform_hash: bool, cores: int
 ) -> None:
     """Transform all fasta files to parquet files to ingest into duckdb, using several processes.
 
@@ -156,7 +161,7 @@ def convert_fastas_to_parquet(
 
     Args:
         input_files (list): Paths of the fasta.gz files.
-        output_folder (str): Folder to write the parquet files to.
+        output_folder (Path): Folder to write the parquet files to.
         perform_hash (bool): Wether to hash the sequences, see fasta_to_parquet.
         cores (int): Number of processes to use.
     """
@@ -169,7 +174,14 @@ def convert_fastas_to_parquet(
         get_reusable_executor().shutdown(wait=True)
 
 
-def build_read_store(input_folder, database_path):
+def build_read_store(input_folder: Path, database_path: Path) -> None:
+    """Build the read data storage (sample, sequence and read count tables) from the parquet files of a folder.
+
+    Args:
+        input_folder (Path): Folder with the parquet files of the samples, they are removed afterwards.
+        database_path (Path): Path of the duckdb database to create.
+    """
+    input_folder = Path(input_folder)
     # fetch the parquet files
     parquet_path = input_folder.joinpath("*.parquet.snappy")
 
@@ -191,6 +203,19 @@ def build_read_store(input_folder, database_path):
         FROM read_parquet({quote_literal(parquet_path)})
         """)
 
+    # one hash has to stand for exactly one sequence, the hash identifies the sequence from here on
+    ambiguous = read_data_store.execute("""
+        SELECT hash, COUNT(DISTINCT sequence) AS nr_sequences
+        FROM temp_db.sequence_read_count_data
+        GROUP BY hash
+        HAVING COUNT(DISTINCT sequence) > 1
+        LIMIT 5
+        """).fetchall()
+    if ambiguous:
+        raise ValueError(
+            f"Sequence hashes have to be unique, but these hashes belong to more than one sequence: {ambiguous}"
+        )
+
     # add the sample data table
     read_data_store.execute("""
         CREATE TABLE main.sample_data AS
@@ -203,20 +228,20 @@ def build_read_store(input_folder, database_path):
         )
         """)
 
-    # add the sequence data table
+    # add the sequence data table with its read sums and order (most reads first, ties by hash)
     read_data_store.execute("""
         CREATE TABLE main.sequence_data AS
-        SELECT 
-            row_number() OVER (ORDER BY hash, sequence) AS sequence_idx,
+        SELECT
+            row_number() OVER (ORDER BY hash) AS sequence_idx,
             hash,
-            sequence,
-        FROM (
-            SELECT DISTINCT hash, sequence
-            FROM temp_db.sequence_read_count_data
-        )
+            any_value(sequence) AS sequence,
+            row_number() OVER (ORDER BY sum(read_count) DESC, hash ASC) AS sequence_order,
+            sum(read_count)::BIGINT AS read_sum
+        FROM temp_db.sequence_read_count_data
+        GROUP BY hash
         """)
 
-    # create the indexed read_count_data, drop the raw read_count_data
+    # create the indexed read_count_data
     read_data_store.execute("""
         CREATE TABLE main.sequence_read_count_data AS
         SELECT
@@ -225,37 +250,12 @@ def build_read_store(input_folder, database_path):
             srd.read_count 
         FROM temp_db.sequence_read_count_data srd
         JOIN main.sample_data sd ON srd.sample = sd.sample
-        JOIN main.sequence_data seqd ON srd.hash = seqd.hash AND srd.sequence = seqd.sequence
+        JOIN main.sequence_data seqd ON srd.hash = seqd.hash
     """)
 
     # detach and remove the temp db
     read_data_store.execute("DETACH temp_db")
     temp_database.unlink()
-
-    # add the counts and order for the fasta data
-    read_data_store.execute(
-        "ALTER TABLE sequence_data ADD COLUMN sequence_order BIGINT"
-    )
-    read_data_store.execute("ALTER TABLE sequence_data ADD COLUMN read_sum BIGINT")
-
-    read_data_store.execute("""
-        UPDATE sequence_data AS sd
-        SET
-            sequence_order = r.sequence_order,
-            read_sum = r.read_sum
-        FROM (
-            SELECT
-                row_number() OVER (
-                    ORDER BY sum(srcd.read_count) DESC, seqd.hash ASC, seqd.sequence ASC
-                ) AS sequence_order, 
-                srcd.sequence_idx, 
-                sum(srcd.read_count)::BIGINT AS read_sum
-            FROM sequence_read_count_data AS srcd
-            JOIN sequence_data AS seqd ON srcd.sequence_idx = seqd.sequence_idx
-            GROUP BY srcd.sequence_idx, seqd.hash, seqd.sequence
-        ) r
-        WHERE sd.sequence_idx = r.sequence_idx
-    """)
 
     # give some user output
     nr_samples = read_data_store.execute(
@@ -271,9 +271,7 @@ def build_read_store(input_folder, database_path):
         "SELECT SUM(read_sum) FROM sequence_data"
     ).fetchone()[0]
 
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Dataset contains {nr_samples:,} samples, {nr_sequences:,} distinct sequences and {nr_reads:,} reads."
-    )
+    log(f"Dataset contains {nr_samples:,} samples, {nr_sequences:,} distinct sequences and {nr_reads:,} reads.")
 
     # close the read data store
     read_data_store.close()
@@ -286,16 +284,16 @@ def build_read_store(input_folder, database_path):
 
 def generate_fasta(
     project_name: str,
-    output_folder: str,
-    database_path: str,
+    output_folder: Path,
+    database_path: Path,
     sequence_type: str,
 ) -> None:
     """Function to read the database and create a fasta file either for sequences or sequence groups
 
     Args:
         project_name (str): Name of the current apscale project.
-        output_folder (str): Output folder to write to.
-        database_path (str): Path to the database where the data is stored.
+        output_folder (Path): Output folder to write to.
+        database_path (Path): Path to the database where the data is stored.
         sequence_type (str): Wether to write sequence or group
     """
     # establish the connection to the database
@@ -323,20 +321,21 @@ def generate_fasta(
 
 def generate_read_table(
     project_name: str,
-    output_folder: str,
-    database_path: str,
+    output_folder: Path,
+    database_path: Path,
     sequence_type: str,
-    temp_folder: str,
+    temp_folder: Path,
 ) -> None:
     """Function to generate a read table from the database. Will be split into multiple tables if data is too large.
 
     Args:
         project_name (str): Name of the apscale project.
-        output_folder (str): Output folder to write to.
-        database_path (str): Path to the database to select the data from.
+        output_folder (Path): Output folder to write to.
+        database_path (Path): Path to the database to select the data from.
         sequence_type (str): Wether to write sequence or group data.
-        temp_folder (str): Path to a temp folder for intermediate writes. Will be deleted at end of function.
+        temp_folder (Path): Path to a temp folder for intermediate writes.
     """
+    output_folder, temp_folder = Path(output_folder), Path(temp_folder)
     # connect the database
     read_data_store = duckdb.connect(database_path)
     # define the temporal database for writing intermediate steps
@@ -362,13 +361,9 @@ def generate_read_table(
 
     # if excel is used as output format compute the maximum samples per excel
     if sequence_count > 1_000_000:
-        print(
-            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Dataset with {sequence_count - 1:,} sequences is too large for excel. Only using parquet."
-        )
+        log(f"Dataset with {sequence_count - 1:,} sequences is too large for excel. Only using parquet.")
     else:
-        print(
-            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Generating table(s) for Excel output."
-        )
+        log(f"Generating table(s) for Excel output.")
 
         # compute the maximum number of samples per file, respect the column limit of Excel
         chunksize = max(
@@ -376,13 +371,13 @@ def generate_read_table(
         )
 
         # fetch the sample names from read store
-        sample_names_iter = enumerate(more_itertools.chunked(sample_names, n=chunksize))
+        sample_names_iter = enumerate(
+            more_itertools.chunked(sample_names, n=chunksize), start=1
+        )
 
         # for each chunk create a pivot table and stream it directly to excel
         for idx, chunk in sample_names_iter:
-            print(
-                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table, adding hashes and sequences."
-            )
+            log(f"Pivoting table, adding hashes and sequences.")
 
             # pivot the sparse read counts of this chunk of samples, missing counts are zeros
             read_table_query = f"""
@@ -397,9 +392,7 @@ def generate_read_table(
                 ORDER BY sd.sequence_order
                 """
 
-            print(
-                f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing Excel output file."
-            )
+            log(f"Writing Excel output file.")
 
             # define the output path
             output_file_name_xlsx = Path(
@@ -412,9 +405,7 @@ def generate_read_table(
             write_excel(read_data_store, read_table_query, output_file_name_xlsx)
 
     # always write output to parquet
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Generating table for parquet output."
-    )
+    log(f"Generating table for parquet output.")
 
     # define the output file name
     output_file_name_parquet = Path(
@@ -423,7 +414,7 @@ def generate_read_table(
         )
     )
 
-    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Pivoting table.")
+    log(f"Pivoting table.")
 
     # chunk the data
     max_rows_per_chunk = max(MIN_ROWS_PER_CHUNK, MAX_PIVOT_CELLS // len(sample_names))
@@ -455,11 +446,9 @@ def generate_read_table(
             """)
 
         # give user output
-        print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Chunk {i} processed.")
+        log(f"Chunk {i} processed.")
 
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Adding hashes and sequences, ordering table and writing parquet output."
-    )
+    log(f"Adding hashes and sequences, ordering table and writing parquet output.")
 
     # create the parquet path to read the chunks from
     parquet_path = Path(temp_folder.joinpath("pivot_chunk_*.parquet.snappy"))
@@ -476,7 +465,7 @@ def generate_read_table(
             file.unlink()
 
     # build the final read_table
-    read_table = read_data_store.execute(f"""
+    read_data_store.execute(f"""
         COPY (
             SELECT
                 sd.hash,
@@ -498,18 +487,18 @@ def generate_read_table(
 
 def generate_sequence_groups(
     project_name: str,
-    data_path: str,
-    database_path: str,
-    temp_path: str,
+    data_path: Path,
+    database_path: Path,
+    temp_path: Path,
     group_threshold: float,
 ):
     """Function to cluster sequences into groups with a fixed threshold.
 
     Args:
         project_name (str): Name of the Apscale project.
-        data_path (str): Path to save the final data.
-        database_path (str): Path to the duckdb database.
-        temp_path (str): Path to save temporary products.
+        data_path (Path): Path to save the final data.
+        database_path (Path): Path to the duckdb database.
+        temp_path (Path): Path to save temporary products.
         group_threshold (float): Threshold to perform the grouping with.
     """
     cluster_fasta = Path(temp_path).joinpath(f"{project_name}_cluster_input.fasta")
@@ -547,9 +536,7 @@ def generate_sequence_groups(
                     [f">{hash};size={read_sum}\n{sequence}\n" for hash, sequence, read_sum in batch]
                 )
 
-        print(
-            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Clustering sequences with vsearch."
-        )
+        log(f"Clustering sequences with vsearch.")
 
         # greedy, abundance based clustering (AGC): a sequence joins the most abundant centroid it is similar to
         try:
@@ -646,9 +633,7 @@ def generate_sequence_groups(
         "SELECT COUNT(*) FROM main.group_data"
     ).fetchone()[0]
 
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Found {nr_of_groups} sequence groups. Updating read data storage."
-    )
+    log(f"Found {nr_of_groups} sequence groups. Updating read data storage.")
 
     # update the sequence_idx column in sequence_read_count_data with group_idx
     # coalesce to include the dummy hash / dummy seq
@@ -682,12 +667,12 @@ def generate_sequence_groups(
             file.unlink()
 
 
-def write_log(logfile_base_path: str, database_path: str):
+def write_log(logfile_base_path: Path, database_path: Path):
     """Function to log the group mapping. Writes one Excel file per LOG_ROWS_PER_FILE rows.
 
     Args:
-        logfile_base_path (str): Path to the folder to write the logfiles to.
-        database_path (str): Path to the duckdb database
+        logfile_base_path (Path): Path to the folder to write the logfiles to.
+        database_path (Path): Path to the duckdb database
     """
     # remove logs of earlier runs, they would be mixed up with the new ones
     for old_log in Path(logfile_base_path).glob("Logfile_11_read_table_part_*.xlsx"):
@@ -714,7 +699,7 @@ def write_log(logfile_base_path: str, database_path: str):
         """)
     nr_of_rows = read_data_store.execute("SELECT COUNT(*) FROM log_rows").fetchone()[0]
 
-    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Writing logs.")
+    log(f"Writing logs.")
 
     for file_nr, first_row in enumerate(range(1, nr_of_rows + 1, LOG_ROWS_PER_FILE), start=1):
         # one file per range of rows
@@ -734,12 +719,13 @@ def write_log(logfile_base_path: str, database_path: str):
     read_data_store.close()
 
 
-def main(project=Path.cwd()):
+def main(project: Path = None):
     """Main function to initially create the read table data.
 
     Args:
-        project (str, optional): Path to the apscale project to work in. Defaults to Path.cwd().
+        project (Path, optional): Path to the apscale project to work in. Defaults to the current working directory.
     """
+    project = Path.cwd() if project is None else Path(project)
     # collect the general settings
     gen_settings = pd.read_excel(
         Path(project).joinpath(
@@ -772,12 +758,9 @@ def main(project=Path.cwd()):
             "No previous processing step is enabled in the settings, there is no data to build read tables from."
         )
 
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Last analysis step was {prior_step}. Using data from this step."
-    )
+    log(f"Last analysis step was {prior_step}. Using data from this step.")
 
     # collect the input for read table generation
-    # generate a data folder to save the hdf store
     input_files = glob.glob(
         str(Path(project).joinpath(prior_step, "data", "*.fasta.gz"))
     )
@@ -807,9 +790,7 @@ def main(project=Path.cwd()):
     # remove read tables of earlier runs, they would be stale if read table generation is switched off
     remove_old_read_tables(data_path, project_name)
 
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Building read data storage."
-    )
+    log(f"Building read data storage.")
 
     # only perform hashing if no aggregation step has been used before
     convert_fastas_to_parquet(
@@ -819,49 +800,37 @@ def main(project=Path.cwd()):
     # build the duckdb database
     build_read_store(temp_path, database_path)
 
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Read data storage build successfully."
-    )
+    log(f"Read data storage build successfully.")
 
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating fasta file for sequences."
-    )
+    log(f"Creating fasta file for sequences.")
 
     # create the fasta file for the sequences
     generate_fasta(project_name, data_path, database_path, "sequence")
 
     # create the read table for the sequences
     if perform_read_table_calc:
-        print(
-            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating read table(s)."
-        )
+        log(f"Creating read table(s).")
         generate_read_table(
             project_name, data_path, database_path, "sequence", temp_path
         )
 
     # sequence grouping
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Starting sequence grouping with a threshold of {group_threshold}."
-    )
+    log(f"Starting sequence grouping with a threshold of {group_threshold}.")
 
     generate_sequence_groups(
         project_name, data_path, database_path, temp_path, group_threshold
     )
 
     # sequence grouping
-    print(f"{datetime.datetime.now().strftime('%H:%M:%S')}: Grouping finished.")
+    log(f"Grouping finished.")
 
     # fasta for sequence groups
-    print(
-        f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating fasta file for sequence groups."
-    )
+    log(f"Creating fasta file for sequence groups.")
     generate_fasta(project_name, data_path, database_path, "group")
 
     # create the read table for the groups
     if perform_read_table_calc:
-        print(
-            f"{datetime.datetime.now().strftime('%H:%M:%S')}: Creating read table(s)."
-        )
+        log(f"Creating read table(s).")
         generate_read_table(project_name, data_path, database_path, "group", temp_path)
 
     # finally write a human readable log for the group mapping

@@ -64,3 +64,16 @@ def test_ambiguous_names_stop_read_table_generation(tmp_path, make_storage):
     db, data, temp = make_storage(tmp_path, ["Sample1", "sample1"])
     with pytest.raises(ValueError, match="case"):
         j.generate_read_table("t", data, db, "sequence", temp)
+
+
+def test_hash_with_two_sequences_is_rejected(tmp_path):
+    import pandas as pd
+
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    pd.DataFrame(
+        [("s1", "h1", "ACGT", 3), ("s2", "h1", "ACGA", 4), ("s1", "dummy_hash", "dummy_seq", 0), ("s2", "dummy_hash", "dummy_seq", 0)],
+        columns=["sample", "hash", "sequence", "read_count"],
+    ).to_parquet(temp / "all.parquet.snappy")
+    with pytest.raises(ValueError, match="unique"):
+        j.build_read_store(temp, tmp_path / "db.duckdb")

@@ -17,12 +17,12 @@ def test_old_excel_parts_are_removed(tmp_path, make_storage, monkeypatch):
 
     monkeypatch.setattr(j, "EXCEL_MAX_CELLS", 10_000_000)  # everything fits into one part
     j.generate_read_table("t", data, db, "sequence", temp)
-    assert _parts(data) == ["0_t_sequence_read_table_part_0.xlsx"]
+    assert _parts(data) == ["0_t_sequence_read_table_part_1.xlsx"]
 
 
 def test_other_files_are_kept(tmp_path, make_storage):
     db, data, temp = make_storage(tmp_path, SAMPLES)
-    keep = [data / "1_t_group_read_table_part_0.xlsx", data / "0_other_sequence_read_table_part_0.xlsx", data / "notes.xlsx"]
+    keep = [data / "1_t_group_read_table_part_1.xlsx", data / "0_other_sequence_read_table_part_1.xlsx", data / "notes.xlsx"]
     for f in keep:
         f.write_text("x")
     j.generate_read_table("t", data, db, "sequence", temp)
@@ -31,7 +31,7 @@ def test_other_files_are_kept(tmp_path, make_storage):
 
 def test_remove_old_read_tables_covers_parquet_and_both_types(tmp_path):
     names = [
-        "0_t_sequence_read_table_part_0.xlsx",
+        "0_t_sequence_read_table_part_1.xlsx",
         "0_t_sequence_read_table.parquet.snappy",
         "1_t_group_read_table_part_3.xlsx",
         "1_t_group_read_table.parquet.snappy",
